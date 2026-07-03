@@ -1,0 +1,5 @@
+/home/sid/Documents/GitHub/self-learning-chess/cpp_engine/CMakeFiles/tuner.dir
+/home/sid/Documents/GitHub/self-learning-chess/cpp_engine/CMakeFiles/classical_engine.dir
+/home/sid/Documents/GitHub/self-learning-chess/cpp_engine/CMakeFiles/nnue_engine.dir
+/home/sid/Documents/GitHub/self-learning-chess/cpp_engine/CMakeFiles/edit_cache.dir
+/home/sid/Documents/GitHub/self-learning-chess/cpp_engine/CMakeFiles/rebuild_cache.dir
