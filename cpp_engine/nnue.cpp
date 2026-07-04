@@ -3,13 +3,15 @@
 #include <iostream>
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
+#include <immintrin.h>
 
 namespace nnue {
 
-int16_t fc1_w[HIDDEN_SIZE][NUM_FEATURES];
-int16_t fc1_b[HIDDEN_SIZE];
-int16_t fc2_w[1][HIDDEN_SIZE * 2];
-int32_t fc2_b[1];
+alignas(32) int16_t fc1_w[NUM_FEATURES][HIDDEN_SIZE];
+alignas(32) int16_t fc1_b[HIDDEN_SIZE];
+alignas(32) int16_t fc2_w[1][HIDDEN_SIZE * 2];
+alignas(32) int32_t fc2_b[1];
 
 void load_weights(const std::string& filepath) {
     std::ifstream file(filepath, std::ios::binary);
@@ -17,7 +19,17 @@ void load_weights(const std::string& filepath) {
         throw std::runtime_error("Cannot open NNUE weights file: " + filepath);
     }
     
-    file.read(reinterpret_cast<char*>(fc1_w), sizeof(fc1_w));
+    // Read fc1_w into a temporary buffer (saved as [HIDDEN_SIZE][NUM_FEATURES])
+    std::vector<int16_t> temp_fc1_w(NUM_FEATURES * HIDDEN_SIZE);
+    file.read(reinterpret_cast<char*>(temp_fc1_w.data()), temp_fc1_w.size() * sizeof(int16_t));
+    
+    // Transpose into [NUM_FEATURES][HIDDEN_SIZE]
+    for (int i = 0; i < HIDDEN_SIZE; ++i) {
+        for (int j = 0; j < NUM_FEATURES; ++j) {
+            fc1_w[j][i] = temp_fc1_w[i * NUM_FEATURES + j];
+        }
+    }
+    
     file.read(reinterpret_cast<char*>(fc1_b), sizeof(fc1_b));
     file.read(reinterpret_cast<char*>(fc2_w), sizeof(fc2_w));
     file.read(reinterpret_cast<char*>(fc2_b), sizeof(fc2_b));
@@ -28,7 +40,7 @@ void load_weights(const std::string& filepath) {
 }
 
 int get_piece_idx(chess::Color perspective, chess::Piece piece) {
-    int pt = static_cast<int>(piece.type()) - 1; // Pawn=0, Knight=1, Bishop=2, Rook=3, Queen=4
+    int pt = static_cast<int>(piece.type()); // Pawn=0, Knight=1, Bishop=2, Rook=3, Queen=4
     bool is_mine = (piece.color() == perspective);
     return is_mine ? pt : pt + 5;
 }
@@ -50,18 +62,27 @@ int get_feature_index(chess::Color perspective, chess::Piece piece, chess::Squar
 
 void refresh_accumulator(const chess::Board& board, chess::Color perspective, Accumulator& acc) {
     int16_t* target = (perspective == chess::Color::WHITE) ? acc.white : acc.black;
-    for (int i = 0; i < HIDDEN_SIZE; ++i) {
-        target[i] = fc1_b[i];
+    const int16_t* bias = fc1_b;
+    
+    // Copy biases using AVX2
+    for (int i = 0; i < HIDDEN_SIZE; i += 16) {
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(&target[i]), _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&bias[i])));
     }
     
     chess::Square king_sq = board.kingSq(perspective);
     
     for (int sq = 0; sq < 64; ++sq) {
         chess::Piece piece = board.at(chess::Square(sq));
-        if (piece != chess::Piece::NONE && piece.type() != chess::PieceType::KING) {
+        if (piece.type() != chess::PieceType::NONE && piece.type() != chess::PieceType::KING) {
             int idx = get_feature_index(perspective, piece, chess::Square(sq), king_sq);
-            for (int i = 0; i < HIDDEN_SIZE; ++i) {
-                target[i] += fc1_w[i][idx];
+            if (idx < 0 || idx >= NUM_FEATURES) std::cout << "INVALID IDX: " << idx << std::endl;
+            const int16_t* weight = fc1_w[idx];
+            
+            // Vectorized addition
+            for (int i = 0; i < HIDDEN_SIZE; i += 16) {
+                __m256i t = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&target[i]));
+                __m256i w = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&weight[i]));
+                _mm256_storeu_si256(reinterpret_cast<__m256i*>(&target[i]), _mm256_add_epi16(t, w));
             }
         }
     }
@@ -73,7 +94,7 @@ void init_accumulator(const chess::Board& board, Accumulator& acc) {
 }
 
 static void update_feature(const chess::Board& board, Accumulator& acc, chess::Piece piece, chess::Square sq, int sign) {
-    if (piece.type() == chess::PieceType::KING) return;
+    if (piece.type() == chess::PieceType::NONE || piece.type() == chess::PieceType::KING) return;
     
     chess::Square w_king_sq = board.kingSq(chess::Color::WHITE);
     chess::Square b_king_sq = board.kingSq(chess::Color::BLACK);
@@ -81,9 +102,31 @@ static void update_feature(const chess::Board& board, Accumulator& acc, chess::P
     int w_idx = get_feature_index(chess::Color::WHITE, piece, sq, w_king_sq);
     int b_idx = get_feature_index(chess::Color::BLACK, piece, sq, b_king_sq);
     
-    for (int i = 0; i < HIDDEN_SIZE; ++i) {
-        acc.white[i] += sign * fc1_w[i][w_idx];
-        acc.black[i] += sign * fc1_w[i][b_idx];
+    int16_t* w_acc = acc.white;
+    int16_t* b_acc = acc.black;
+    const int16_t* w_weight = fc1_w[w_idx];
+    const int16_t* b_weight = fc1_w[b_idx];
+    
+    if (sign == 1) {
+        for (int i = 0; i < HIDDEN_SIZE; i += 16) {
+            __m256i wa = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&w_acc[i]));
+            __m256i ww = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&w_weight[i]));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(&w_acc[i]), _mm256_add_epi16(wa, ww));
+
+            __m256i ba = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&b_acc[i]));
+            __m256i bw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&b_weight[i]));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(&b_acc[i]), _mm256_add_epi16(ba, bw));
+        }
+    } else {
+        for (int i = 0; i < HIDDEN_SIZE; i += 16) {
+            __m256i wa = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&w_acc[i]));
+            __m256i ww = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&w_weight[i]));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(&w_acc[i]), _mm256_sub_epi16(wa, ww));
+
+            __m256i ba = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&b_acc[i]));
+            __m256i bw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&b_weight[i]));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(&b_acc[i]), _mm256_sub_epi16(ba, bw));
+        }
     }
 }
 
@@ -110,7 +153,7 @@ void update_accumulator(const chess::Board& board, const chess::Move& move, cons
     update_feature(board, next_acc, piece, from, -1);
     
     // 2. Handle captures (remove captured piece)
-    if (captured != chess::Piece::NONE) {
+    if (captured.type() != chess::PieceType::NONE) {
         update_feature(board, next_acc, captured, to, -1);
     } else if (move.typeOf() == chess::Move::ENPASSANT) {
         chess::Square cap_sq = chess::Square(to.index() + (board.sideToMove() == chess::Color::WHITE ? -8 : 8));
@@ -144,21 +187,39 @@ void update_accumulator(const chess::Board& board, const chess::Move& move, cons
 }
 
 int evaluate(const Accumulator& acc, chess::Color side_to_move) {
-    int32_t sum = fc2_b[0];
-    
-    for (int i = 0; i < HIDDEN_SIZE; ++i) {
-        int16_t w = std::min(256, std::max(0, static_cast<int>(acc.white[i])));
-        int16_t b = std::min(256, std::max(0, static_cast<int>(acc.black[i])));
+    __m256i zero = _mm256_setzero_si256();
+    __m256i max_val = _mm256_set1_epi16(256);
+    __m256i sum_vec = _mm256_setzero_si256();
+
+    const int16_t* w_acc = acc.white;
+    const int16_t* b_acc = acc.black;
+    const int16_t* fc2_w_w = fc2_w[0];
+    const int16_t* fc2_w_b = &fc2_w[0][HIDDEN_SIZE];
+
+    for (int i = 0; i < HIDDEN_SIZE; i += 16) {
+        __m256i w = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&w_acc[i]));
+        __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&b_acc[i]));
         
-        sum += w * fc2_w[0][i];
-        sum += b * fc2_w[0][HIDDEN_SIZE + i];
+        __m256i w_clamped = _mm256_min_epi16(_mm256_max_epi16(w, zero), max_val);
+        __m256i b_clamped = _mm256_min_epi16(_mm256_max_epi16(b, zero), max_val);
+
+        __m256i ww = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&fc2_w_w[i]));
+        __m256i bw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&fc2_w_b[i]));
+        
+        __m256i w_prod = _mm256_madd_epi16(w_clamped, ww);
+        __m256i b_prod = _mm256_madd_epi16(b_clamped, bw);
+
+        sum_vec = _mm256_add_epi32(sum_vec, w_prod);
+        sum_vec = _mm256_add_epi32(sum_vec, b_prod);
     }
+
+    // Horizontal add of 8 32-bit integers in sum_vec
+    __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(sum_vec), _mm256_extracti128_si256(sum_vec, 1));
+    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(1, 0, 3, 2)));
+    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(2, 3, 0, 1)));
     
-    // The network was trained with sigmoid output predicting White's win probability.
-    // sum is the pre-sigmoid logit scaled by (256 * 64).
-    // The training used K=0.003: prob = sigmoid(cp * 0.003)
-    // So the raw network output logit = cp * 0.003 * (256 * 64)
-    // Therefore: cp = sum / (0.003 * 256 * 64) = sum / 49.15
+    int32_t sum = _mm_cvtsi128_si32(sum128) + fc2_b[0];
+
     int white_score = sum / 49;
     return (side_to_move == chess::Color::WHITE) ? white_score : -white_score;
 }

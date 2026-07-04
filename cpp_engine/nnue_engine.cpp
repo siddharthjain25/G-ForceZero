@@ -61,29 +61,43 @@ static_assert(sizeof(TTEntry) == 8, "TTEntry must be 8 bytes");
 // 16M entries = 128 MB
 const int TT_SIZE = 1 << 24;
 const int TT_MASK = TT_SIZE - 1;
-std::vector<TTEntry> TT(TT_SIZE, {0, 0, 0, 0, TTEntry::NONE});
+std::atomic<uint64_t>* TT = new std::atomic<uint64_t>[TT_SIZE];
 
 void tt_clear() {
-    std::fill(TT.begin(), TT.end(), TTEntry{0, 0, 0, 0, TTEntry::NONE});
+    for(int i=0; i<TT_SIZE; ++i) {
+        TT[i].store(0, std::memory_order_relaxed);
+    }
 }
 
 void write_tt(uint64_t hash, Move move, int depth, int score, TTEntry::Flag flag) {
     int base = (hash & (TT_MASK >> 1)) * 2;
     uint16_t key = static_cast<uint16_t>(hash >> 48);
 
+    TTEntry new_entry = { key, move.move(), static_cast<int16_t>(score), static_cast<int8_t>(depth), static_cast<uint8_t>(flag) };
+    uint64_t data;
+    std::memcpy(&data, &new_entry, 8);
+
     // Slot 0: depth-preferred
-    if (TT[base].flag == TTEntry::NONE || depth >= TT[base].depth) {
-        TT[base] = { key, move.move(), static_cast<int16_t>(score), static_cast<int8_t>(depth), flag };
+    uint64_t slot0_data = TT[base].load(std::memory_order_relaxed);
+    TTEntry slot0;
+    std::memcpy(&slot0, &slot0_data, 8);
+    
+    if (slot0.flag == TTEntry::NONE || depth >= slot0.depth) {
+        TT[base].store(data, std::memory_order_relaxed);
     }
     // Slot 1: always-replace
-    TT[base + 1] = { key, move.move(), static_cast<int16_t>(score), static_cast<int8_t>(depth), flag };
+    TT[base + 1].store(data, std::memory_order_relaxed);
 }
 
 Move probe_tt_move(uint64_t hash) {
     int base = (hash & (TT_MASK >> 1)) * 2;
     uint16_t key = static_cast<uint16_t>(hash >> 48);
-    if (TT[base].key == key   && TT[base].flag   != TTEntry::NONE) return Move(TT[base].move);
-    if (TT[base+1].key == key && TT[base+1].flag != TTEntry::NONE) return Move(TT[base+1].move);
+    for (int i = 0; i < 2; ++i) {
+        uint64_t data = TT[base + i].load(std::memory_order_relaxed);
+        TTEntry tte;
+        std::memcpy(&tte, &data, 8);
+        if (tte.key == key && tte.flag != TTEntry::NONE) return Move(tte.move);
+    }
     return Move::NULL_MOVE;
 }
 
@@ -91,7 +105,10 @@ bool probe_tt(uint64_t hash, int depth, int alpha, int beta, int& score, Move& t
     int base = (hash & (TT_MASK >> 1)) * 2;
     uint16_t key = static_cast<uint16_t>(hash >> 48);
     for (int i = 0; i < 2; ++i) {
-        TTEntry& tte = TT[base + i];
+        uint64_t data = TT[base + i].load(std::memory_order_relaxed);
+        TTEntry tte;
+        std::memcpy(&tte, &data, 8);
+        
         if (tte.key != key || tte.flag == TTEntry::NONE) continue;
         if (tt_move == Move::NULL_MOVE && tte.move) tt_move = Move(tte.move);
         if (tte.depth >= depth) {
@@ -102,6 +119,8 @@ bool probe_tt(uint64_t hash, int depth, int alpha, int beta, int& score, Move& t
     }
     return false;
 }
+
+int num_threads = 1;
 
 // ─── Search State ─────────────────────────────────────────────────────────────
 Move  killer_moves[MAX_PLY][2];
@@ -753,6 +772,49 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     return best_score;
 }
 
+// ─── Search Worker (Helper Threads) ───────────────────────────────────────────
+void search_worker(Board board, int target_ms) {
+    nnue::Accumulator root_acc;
+    nnue::init_accumulator(board, root_acc);
+
+    int previous_score = 0;
+    for (int depth = 1; depth <= 64; ++depth) {
+        if (abort_search) break;
+
+        int alpha = -INF;
+        int beta  = INF;
+        
+        // Slightly change start depth window for diversity, or just use wide window
+        if (depth >= 5) {
+            alpha = previous_score - 50;
+            beta  = previous_score + 50;
+        }
+
+        int score;
+        int fail_low_cnt = 0;
+        int fail_high_cnt = 0;
+        
+        while (true) {
+            score = negamax(board, depth, alpha, beta, 0, true, root_acc, Move::NULL_MOVE);
+            if (abort_search) break;
+            
+            if (score <= alpha) {
+                fail_low_cnt++;
+                beta = (alpha + beta) / 2;
+                alpha = std::max(-INF, alpha - 50 * (1 << fail_low_cnt));
+            } else if (score >= beta) {
+                fail_high_cnt++;
+                beta = std::min(INF, beta + 50 * (1 << fail_high_cnt));
+            } else {
+                break;
+            }
+        }
+        if (!abort_search) {
+            previous_score = score;
+        }
+    }
+}
+
 // ─── Iterative Deepening + Aspiration Windows ─────────────────────────────────
 Move search_best_move(Board& board, int target_ms) {
     Move best_move     = Move::NULL_MOVE;
@@ -774,6 +836,11 @@ Move search_best_move(Board& board, int target_ms) {
     nnue::init_accumulator(board, root_acc);
 
     int previous_score = 0;
+
+    std::vector<std::thread> workers;
+    for (int i = 1; i < num_threads; ++i) {
+        workers.emplace_back(search_worker, board, target_ms);
+    }
 
     for (int depth = 1; depth <= 64; ++depth) {
         int alpha, beta;
@@ -842,6 +909,11 @@ Move search_best_move(Board& board, int target_ms) {
         if (!ml.empty()) best_move = ml[0];
     }
 
+    // Wait for helper threads
+    for (auto& t : workers) {
+        if (t.joinable()) t.join();
+    }
+
     return best_move;
 }
 
@@ -863,7 +935,14 @@ int main() {
             std::cout << "id name Antigravity NNUE\n"
                       << "id author Siddharth\n"
                       << "option name Hash type spin default 128 min 1 max 1024\n"
+                      << "option name Threads type spin default 1 min 1 max 64\n"
                       << "uciok\n";
+        } else if (command == "setoption") {
+            std::string name, name_val, value, val_val;
+            ss >> name >> name_val >> value >> val_val;
+            if (name_val == "Threads") {
+                num_threads = std::max(1, std::min(64, std::stoi(val_val)));
+            }
         } else if (command == "isready") {
             std::cout << "readyok\n";
         } else if (command == "ucinewgame") {
