@@ -38,6 +38,7 @@ RUN pip3 install Flask
 RUN cp /app/G-ForceZero/render/config.yml /app/lichess-bot/config.yml
 RUN cp /app/G-ForceZero/render/keep_alive.py /app/lichess-bot/keep_alive.py
 RUN cp /app/G-ForceZero/render/start.sh /app/lichess-bot/start.sh
+RUN cp /app/G-ForceZero/cpp_engine/nnue_weights.bin /app/lichess-bot/nnue_weights.bin || true
 
 # Make start script executable
 RUN chmod +x /app/lichess-bot/start.sh
