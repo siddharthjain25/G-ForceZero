@@ -6,7 +6,6 @@ engine:
   name: "nnue_engine"
   protocol: "uci"
   uci_options:
-    Move Overhead: 100
     Threads: 1
     Hash: 64
 
