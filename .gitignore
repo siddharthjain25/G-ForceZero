@@ -1,8 +1,29 @@
+# Virtual Environments
+venv/
 .venv/
-stockfish/
-cpp_engine/lichess_db_standard_rated_2017-02.pgn
+__pycache__/
+
+# Compiled C++ Binaries & Build Files
+cpp_engine/nnue_engine
+cpp_engine/pgn_to_epd
 cpp_engine/gforce
-/cpp_engine/CMakeFiles
-cpp_engine/lichess_2017_training.epd
-cpp_engine/lichess_db_standard_rated_2019-01.pgn
-cpp_engine/wdl_dataset.epd
+cpp_engine/test_*
+cpp_engine/CMakeFiles/
+cpp_engine/CMakeCache.txt
+cpp_engine/Makefile
+cpp_engine/cmake_install.cmake
+
+# Massive Training Datasets (Do NOT push to GitHub)
+*.epd
+*.pgn
+*.jsonl
+*.jsonl.zst
+eval_chunk_*
+stockfish/
+
+# PyTorch Checkpoint States
+best_model.pth
+*.pt
+
+# OS Generated
+.DS_Store

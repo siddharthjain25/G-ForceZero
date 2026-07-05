@@ -1,0 +1,35 @@
+token: "YOUR_API_TOKEN"
+url: "https://lichess.org/"
+
+engine:
+  dir: "/app/G-ForceZero/cpp_engine/"
+  name: "nnue_engine"
+  protocol: "uci"
+  uci_options:
+    Move Overhead: 100
+    Threads: 1
+    Hash: 64
+
+abort_time: 20
+fake_think_time: false
+challenge:
+  concurrency: 1
+  sort_by: "best"
+  accept_bot: true
+  only_bot: false
+  max_increment: 180
+  max_base: 315360000
+  max_days: 14
+  min_increment: 0
+  min_base: 0
+  min_days: 0
+  variants:
+    - standard
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+    - classical
+  modes:
+    - casual
+    - rated

@@ -21,30 +21,52 @@ import struct
 
 NUM_FEATURES = 40960  # 64 (king sq) * 10 (piece types) * 64 (piece sq)
 HIDDEN_SIZE  = 256
-BATCH_SIZE   = 512    # 512 × 40960 × 4 × 2 = 84 MB per batch — fits in VRAM
+BATCH_SIZE   = 4096   # Massive batch size since it fits in VRAM easily (4096 * 40960 elements = ~1.3 GB)
 
 # ─── Feature Encoding ─────────────────────────────────────────────────────────
-def get_piece_idx(piece_type, is_mine):
-    pt = piece_type - 1  # Pawn=0, Knight=1, Bishop=2, Rook=3, Queen=4
-    return pt if is_mine else pt + 5
-
 def fen_to_halfkp(fen):
-    board = chess.Board(fen)
-    wk_sq = board.king(chess.WHITE)
-    bk_sq = board.king(chess.BLACK)
+    w_feat, b_feat = [], []
+    parts = fen.split()
+    board_part = parts[0]
+    
+    wk_sq = None
+    bk_sq = None
+    
+    sq = 56 # A8
+    pieces = []
+    for char in board_part:
+        if char == '/':
+            sq -= 16
+        elif char.isdigit():
+            sq += int(char)
+        else:
+            if char == 'K': wk_sq = sq
+            elif char == 'k': bk_sq = sq
+            pieces.append((sq, char))
+            sq += 1
+            
     if wk_sq is None or bk_sq is None:
         return None, None
+        
     bk_sq_flipped = bk_sq ^ 56
-    w_feat, b_feat = [], []
-    for sq, piece in board.piece_map().items():
-        if piece.piece_type == chess.KING:
-            continue
+    
+    pt_map = {
+        'P': (0, True), 'N': (1, True), 'B': (2, True), 'R': (3, True), 'Q': (4, True),
+        'p': (0, False), 'n': (1, False), 'b': (2, False), 'r': (3, False), 'q': (4, False)
+    }
+    
+    for sq, char in pieces:
+        if char in ('K', 'k'): continue
+        pt, is_white = pt_map[char]
+        
         sq_w = sq
-        sq_b = sq ^ 56
-        pt_w = get_piece_idx(piece.piece_type, piece.color == chess.WHITE)
-        pt_b = get_piece_idx(piece.piece_type, piece.color == chess.BLACK)
+        pt_w = pt if is_white else pt + 5
         w_feat.append(pt_w * 4096 + wk_sq * 64 + sq_w)
+        
+        sq_b = sq ^ 56
+        pt_b = pt if not is_white else pt + 5
         b_feat.append(pt_b * 4096 + bk_sq_flipped * 64 + sq_b)
+        
     return w_feat, b_feat
 
 # ─── Streaming Dataset ────────────────────────────────────────────────────────
@@ -61,24 +83,64 @@ class StreamingEPDDataset(IterableDataset):
 
     def __len__(self):
         if self._len is None:
+            print(f"Counting total positions in {self.epd_file} (This may take several minutes for files > 50GB)...", flush=True)
             with open(self.epd_file, 'rb') as f:
                 self._len = sum(1 for _ in f)
         return self._len
 
     def parse_line(self, line):
-        parts = line.split('"')
-        if len(parts) < 2:
+        line = line.strip()
+        if not line:
             return None
-        fen = parts[0].replace(' c9 ', '').strip()
-        try:
-            val_str = parts[1]
-            if val_str in ["1.0", "0.5", "0.0"]:
-                prob = float(val_str)
+            
+        if line.startswith('{'):
+            # Super-fast native JSONL string extraction (skips slow json.loads)
+            fen_start = line.find('"fen":"')
+            if fen_start == -1: return None
+            fen_start += 7
+            fen_end = line.find('"', fen_start)
+            fen = line[fen_start:fen_end]
+            
+            cp_idx = line.find('"cp":')
+            if cp_idx != -1:
+                cp_start = cp_idx + 5
+                cp_end = line.find(',', cp_start)
+                cp_end_2 = line.find('}', cp_start)
+                if cp_end == -1 or (cp_end_2 != -1 and cp_end_2 < cp_end): cp_end = cp_end_2
+                try:
+                    cp = float(line[cp_start:cp_end].strip())
+                    prob = 1.0 / (1.0 + np.exp(-0.003 * cp))
+                except ValueError:
+                    return None
             else:
-                cp = float(val_str)
-                prob = 1.0 / (1.0 + np.exp(-0.003 * cp))
-        except ValueError:
-            return None
+                mate_idx = line.find('"mate":')
+                if mate_idx != -1:
+                    m_start = mate_idx + 7
+                    m_end = line.find(',', m_start)
+                    m_end_2 = line.find('}', m_start)
+                    if m_end == -1 or (m_end_2 != -1 and m_end_2 < m_end): m_end = m_end_2
+                    try:
+                        mate_val = int(line[m_start:m_end].strip())
+                        prob = 1.0 if mate_val > 0 else 0.0
+                    except ValueError:
+                        return None
+                else:
+                    return None
+        else:
+            # Standard EPD fallback
+            parts = line.split('"')
+            if len(parts) < 2:
+                return None
+            fen = parts[0].replace(' c9 ', '').strip()
+            try:
+                val_str = parts[1]
+                if val_str in ["1.0", "0.5", "0.0"]:
+                    prob = float(val_str)
+                else:
+                    cp = float(val_str)
+                    prob = 1.0 / (1.0 + np.exp(-0.003 * cp))
+            except ValueError:
+                return None
         
         w_feat, b_feat = fen_to_halfkp(fen)
         if w_feat is None:
@@ -148,7 +210,7 @@ def export_quantized_weights(model, filename):
     print(f"Quantized NNUE weights exported to {filename}")
 
 # ─── Training ─────────────────────────────────────────────────────────────────
-def train(dataset_file, epochs=2, num_workers=0):  # 0 = main thread, avoids /dev/shm limit
+def train(dataset_file, epochs=2, num_workers=4):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Dataset: {dataset_file}")
     print(f"Device:  {device}" + (f" ({torch.cuda.get_device_name(0)})" if device.type == 'cuda' else ''))
