@@ -13,7 +13,7 @@ abort_time: 20
 fake_think_time: false
 
 greeting:
-  decline: "Hello! I am a custom cloud-hosted C++ engine running on limited hardware. To prevent lagging out, I can only accept games with at least 3 minutes on the clock and a +2 second increment (e.g., 3+2, 5+5, 10+10). Please challenge me again with an increment!"
+  decline: "Hello! I am a custom cloud-hosted C++ engine running on limited hardware. To prevent lagging out, I can only accept games with at least 3 minutes on the clock (e.g., 3+0, 5+0, 10+0). Please challenge me again with a longer time control!"
 
 challenge:
   concurrency: 1
@@ -23,7 +23,7 @@ challenge:
   max_increment: 180
   max_base: 315360000
   max_days: 14
-  min_increment: 2
+  min_increment: 0
   min_base: 180
   min_days: 0
   variants:
@@ -43,6 +43,8 @@ matchmaking:
     - 300
     - 600
   challenge_increment:
+    - 0
+    - 1
     - 2
     - 3
     - 5
