@@ -659,15 +659,6 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         }
     }
 
-    // ProbCut
-    if (!is_pv && !in_check && depth >= 5 && std::abs(beta) <= MATE_SCORE - 100) {
-        int rbeta = std::min(MATE_SCORE - 100, beta + 200);
-        int probcut_score = -negamax(board, depth - 4, -rbeta, -rbeta + 1, ply, false, acc, prev_move);
-        if (probcut_score >= rbeta) {
-            return probcut_score;
-        }
-    }
-
     // Internal Iterative Deepening: if no TT move and deep node, search shallower first
     if (!is_pv && tt_move == Move::NULL_MOVE && depth >= 5) {
         negamax(board, depth - 4, alpha, beta, ply, false, acc, prev_move);
