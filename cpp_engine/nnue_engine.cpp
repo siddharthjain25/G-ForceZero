@@ -890,6 +890,8 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         
         if (move == excluded_move) continue;
 
+        move_count++;
+
         bool is_capture  = board.isCapture(move) || move.typeOf() == Move::ENPASSANT;
         bool is_promo    = move.typeOf() == Move::PROMOTION;
         if (!is_capture && !is_promo && num_quiets < 64) {
