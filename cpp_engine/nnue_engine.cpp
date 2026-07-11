@@ -136,6 +136,7 @@ int opt_nmp_eval_div = 200;
 int opt_lmr_mult = 225; // 2.25 * 100
 int opt_fp_margin_base = 100;
 int opt_fp_margin_mult = 60;
+int opt_contempt = 15; // cp penalty for draws (avoids shuffling into repetition)
 
 // ─── Search State ─────────────────────────────────────────────────────────────
 Move  killer_moves[MAX_PLY][2];
@@ -608,7 +609,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     bool is_root = (ply == 0);
     bool is_pv   = (beta - alpha > 1);
 
-    if (!is_root && (board.isHalfMoveDraw() || board.isRepetition())) return 0;
+    if (!is_root && (board.isHalfMoveDraw() || board.isRepetition())) return -opt_contempt;
 
     uint64_t hash = board.hash();
     __builtin_prefetch(&TT[(hash & (TT_MASK >> 1)) * 2]);
@@ -983,6 +984,7 @@ int main() {
                       << "option name LMR_Mult type spin default 225 min 50 max 500\n"
                       << "option name FP_Margin_Base type spin default 100 min 10 max 300\n"
                       << "option name FP_Margin_Mult type spin default 60 min 10 max 200\n"
+                      << "option name Contempt type spin default 15 min 0 max 100\n"
                       << "uciok\n";
         } else if (command == "setoption") {
             std::string name, name_val, value, val_val;
@@ -1003,6 +1005,8 @@ int main() {
                 opt_fp_margin_base = std::stoi(val_val);
             } else if (name_val == "FP_Margin_Mult") {
                 opt_fp_margin_mult = std::stoi(val_val);
+            } else if (name_val == "Contempt") {
+                opt_contempt = std::stoi(val_val);
             }
         } else if (command == "isready") {
             std::cout << "readyok\n";
