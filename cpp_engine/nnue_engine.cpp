@@ -59,8 +59,8 @@ struct TTEntry {
 };
 static_assert(sizeof(TTEntry) == 8, "TTEntry must be 8 bytes");
 
-// 16M entries = 128 MB
-const int TT_SIZE = 1 << 24;
+// 32M entries = 256 MB
+const int TT_SIZE = 1 << 25;
 const int TT_MASK = TT_SIZE - 1;
 std::atomic<uint64_t>* TT = new std::atomic<uint64_t>[TT_SIZE];
 
@@ -133,7 +133,7 @@ int opt_rfp_margin = 80;
 int opt_nmp_base = 3;
 int opt_nmp_depth_div = 6;
 int opt_nmp_eval_div = 200;
-int opt_lmr_mult = 225; // 2.25 * 100
+int opt_lmr_mult = 195; // 1.95 * 100
 int opt_fp_margin_base = 100;
 int opt_fp_margin_mult = 60;
 
@@ -839,7 +839,6 @@ void search_worker(Board board, int target_ms) {
             
             if (score <= alpha) {
                 fail_low_cnt++;
-                beta = (alpha + beta) / 2;
                 alpha = std::max(-INF, alpha - 50 * (1 << fail_low_cnt));
             } else if (score >= beta) {
                 fail_high_cnt++;
@@ -905,7 +904,6 @@ Move search_best_move(Board& board, int target_ms) {
             if (score <= alpha) {
                 // Fail-low: widen downward progressively
                 fail_low_cnt++;
-                beta  = (alpha + beta) / 2;
                 alpha = std::max(-INF, alpha - window * (1 << fail_low_cnt));
             } else if (score >= beta) {
                 // Fail-high: widen upward progressively
@@ -936,9 +934,9 @@ Move search_best_move(Board& board, int target_ms) {
                   << "\n";
         std::cout.flush();
 
-        // Stop early if mate found or more than half time is used
+        // Stop early if mate found or iteration took too much time
         if (score > MATE_SCORE - 200 || score < -MATE_SCORE + 200) break;
-        if (elapsed_ms > target_ms / 2) break;
+        if (elapsed_ms > target_ms / 3) break;
     }
 
     // Safety: if somehow no move was found, play first legal
