@@ -22,7 +22,7 @@ COPY . /app/G-ForceZero
 
 # Compile the C++ Engine (using high performance flags)
 WORKDIR /app/G-ForceZero/cpp_engine
-RUN g++ -O3 -march=native nnue_engine.cpp nnue.cpp -o nnue_engine
+RUN g++ -O3 -march=native -flto -pthread -std=c++17 -I Fathom/src nnue_engine.cpp nnue.cpp Fathom/src/tbprobe.c -o nnue_engine
 
 # Clone the official Lichess Bot
 WORKDIR /app
@@ -40,6 +40,7 @@ RUN cp /app/G-ForceZero/render/keep_alive.py /app/lichess-bot/keep_alive.py
 RUN cp /app/G-ForceZero/render/start.sh /app/lichess-bot/start.sh
 RUN cp /app/G-ForceZero/cpp_engine/nnue_weights.bin /app/lichess-bot/nnue_weights.bin || true
 RUN cp /app/G-ForceZero/cpp_engine/book.bin /app/lichess-bot/book.bin || true
+RUN mkdir -p /app/lichess-bot/syzygy
 
 # Make start script executable
 RUN chmod +x /app/lichess-bot/start.sh

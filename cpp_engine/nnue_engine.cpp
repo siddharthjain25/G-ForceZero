@@ -35,6 +35,7 @@
 #include "chess.hpp"
 #include "nnue.hpp"
 #include "polyglot.hpp"
+#include "syzygy_probe.hpp"
 
 using namespace chess;
 
@@ -930,6 +931,10 @@ Move search_best_move(Board& board, int target_ms) {
 // ─── UCI Loop ─────────────────────────────────────────────────────────────────
 int main() {
     nnue::load_weights("nnue_weights.bin");
+    std::cout << "G-ForceZero NNUE Engine initialized.\n";
+    
+    // Initialize Syzygy Tablebases (Expects files in 'syzygy' folder)
+    init_syzygy("syzygy");
 
     chess::Board board;
     board.setFen(chess::constants::STARTPOS);
@@ -1039,9 +1044,16 @@ int main() {
                 std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
                 std::cout.flush();
             } else {
-                best = search_best_move(board, target_ms);
-                std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
-                std::cout.flush();
+                chess::Move syzygy_move = probe_syzygy_root(board);
+                if (syzygy_move != chess::Move::NULL_MOVE) {
+                    std::cout << "info string Playing perfect move from Syzygy Endgame Tablebase\n";
+                    std::cout << "bestmove " << chess::uci::moveToUci(syzygy_move) << "\n";
+                    std::cout.flush();
+                } else {
+                    best = search_best_move(board, target_ms);
+                    std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
+                    std::cout.flush();
+                }
             }
         } else if (command == "quit") {
             break;
