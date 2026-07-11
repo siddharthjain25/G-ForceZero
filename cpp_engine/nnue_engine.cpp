@@ -1,22 +1,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Antigravity NNUE Chess Engine
-//  Target: ~2500 ELO
+//  Target: ~2800 ELO
 //  Features:
 //    • Negamax + Alpha-Beta + PVS
 //    • Iterative Deepening + Aspiration Windows (progressive widening)
 //    • Two-bucket Transposition Table (16M entries, 128 MB)
 //    • Internal Iterative Deepening (IID)
-//    • Null-Move Pruning (adaptive R)
-//    • Late Move Reductions (LMR, log-based)
-//    • Futility Pruning (forward)
-//    • Reverse Futility Pruning (static NMP)
+//    • Null-Move Pruning (adaptive R, gated by improving flag)
+//    • Late Move Reductions (LMR, log-based, improving-aware)
+//    • Futility Pruning (forward, pre-makeMove)
+//    • Reverse Futility Pruning (improving-aware)
+//    • SEE-based quiet move pruning (pre-makeMove)
+//    • Late Move Pruning (pre-makeMove)
 //    • Full Recursive SEE for capture ordering & pruning
 //    • Delta Pruning in Quiescence
 //    • Check Extensions
-//    • Move ordering: TT move > winning captures (SEE) > killers > counter-moves > history > quiet > losing captures
+//    • Singular Extensions
+//    • Contempt Factor (draw avoidance)
+//    • Move ordering: TT move > winning captures (SEE+cap_hist) > killers > counter-moves > history+cont_hist > quiet > losing captures
 //    • History Heuristic with gravity (halving between searches)
+//    • History Malus (penalize failing quiet moves)
+//    • Continuation History (1-ply: prev_piece×prev_to × piece×to)
+//    • Capture History (attacker × target_sq × victim)
 //    • Killer Moves (2 slots)
 //    • Counter-Move Heuristic
+//    • Improving Flag (static eval vs 2 plies ago)
 //    • HalfKP NNUE (50% weight) + Classical Eval (50% weight)
 //    • Accurate time management
 // ─────────────────────────────────────────────────────────────────────────────
