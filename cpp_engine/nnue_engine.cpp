@@ -585,10 +585,7 @@ void sort_moves(const Board& board, Movelist& moves, Move tt_move = Move::NULL_M
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
 int evaluate(const Board& board, const nnue::Accumulator& acc) {
-    int classical = classical_evaluate(board);
-    int nnue_score = nnue::evaluate(acc, board.sideToMove());
-    // 50% classical, 50% NNUE
-    return (classical + nnue_score) / 2;
+    return nnue::evaluate(acc, board.sideToMove());
 }
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
@@ -1125,14 +1122,12 @@ int main() {
                       << "option name Contempt type spin default 15 min 0 max 100\n"
                       << "uciok\n";
         } else if (command == "eval") {
-            int classical = classical_evaluate(board);
             nnue::Accumulator acc;
             nnue::refresh_accumulator(board, Color::WHITE, acc);
             nnue::refresh_accumulator(board, Color::BLACK, acc);
             int nnue_score = nnue::evaluate(acc, board.sideToMove());
-            std::cout << "Classical Eval: " << classical << "\n";
             std::cout << "NNUE Eval: " << nnue_score << "\n";
-            std::cout << "Total Eval: " << (classical + nnue_score) / 2 << "\n";
+            std::cout << "Total Eval: " << nnue_score << "\n";
         } else if (command == "setoption") {
             std::string name, name_val, value, val_val;
             ss >> name >> name_val >> value >> val_val;
