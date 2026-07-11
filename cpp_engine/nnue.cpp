@@ -191,6 +191,8 @@ int evaluate(const Accumulator& acc, chess::Color side_to_move) {
     __m256i max_val = _mm256_set1_epi16(256);
     __m256i sum_vec = _mm256_setzero_si256();
 
+    // Training used [white_acc, black_acc] → output positive for white winning.
+    // Use white/black ordering to match training (not STM/NSTM).
     const int16_t* w_acc = acc.white;
     const int16_t* b_acc = acc.black;
     const int16_t* fc2_w_w = fc2_w[0];
@@ -206,11 +208,8 @@ int evaluate(const Accumulator& acc, chess::Color side_to_move) {
         __m256i ww = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&fc2_w_w[i]));
         __m256i bw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&fc2_w_b[i]));
         
-        __m256i w_prod = _mm256_madd_epi16(w_clamped, ww);
-        __m256i b_prod = _mm256_madd_epi16(b_clamped, bw);
-
-        sum_vec = _mm256_add_epi32(sum_vec, w_prod);
-        sum_vec = _mm256_add_epi32(sum_vec, b_prod);
+        sum_vec = _mm256_add_epi32(sum_vec, _mm256_madd_epi16(w_clamped, ww));
+        sum_vec = _mm256_add_epi32(sum_vec, _mm256_madd_epi16(b_clamped, bw));
     }
 
     // Horizontal add of 8 32-bit integers in sum_vec
@@ -220,8 +219,15 @@ int evaluate(const Accumulator& acc, chess::Color side_to_move) {
     
     int32_t sum = _mm_cvtsi128_si32(sum128) + fc2_b[0];
 
-    int white_score = sum / 49;
-    return (side_to_move == chess::Color::WHITE) ? white_score : -white_score;
+    // Quantization scaling:
+    // fc1_w quantized as *256, fc1_b as *256, fc2_w as *64, fc2_b as *64*256
+    // Output: 256*64 = 16384 scale. Training K=0.003 → cp = sum / (16384*0.003) ≈ sum/49
+    // raw_cp is positive when white is winning. Convert to side-to-move perspective.
+    int raw_cp = sum / 49;
+    raw_cp = std::max(-2500, std::min(2500, raw_cp));
+    
+    // Return from side-to-move perspective
+    return (side_to_move == chess::Color::WHITE) ? raw_cp : -raw_cp;
 }
 
 } // namespace nnue
