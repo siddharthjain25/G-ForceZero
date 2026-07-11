@@ -681,7 +681,7 @@ void partial_sort_next(ScoredMove* scored, int start, int n) {
 }
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
-int quiescence(Board& board, int alpha, int beta, nnue::Accumulator acc, int ply = 0) {
+int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, int ply = 0) {
     if ((nodes.load(std::memory_order_relaxed) & 4095) == 0 &&
         std::chrono::high_resolution_clock::now() > end_time)
         abort_search = true;
@@ -737,7 +737,7 @@ int quiescence(Board& board, int alpha, int beta, nnue::Accumulator acc, int ply
 }
 
 // ─── Negamax ─────────────────────────────────────────────────────────────────
-int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, nnue::Accumulator acc, Move prev_move = Move::NULL_MOVE, Move prev_prev_move = Move::NULL_MOVE, Move excluded_move = Move::NULL_MOVE) {
+int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, const nnue::Accumulator& acc, Move prev_move = Move::NULL_MOVE, Move prev_prev_move = Move::NULL_MOVE, Move excluded_move = Move::NULL_MOVE) {
     if ((nodes.load(std::memory_order_relaxed) & 4095) == 0) {
         auto chk_now = std::chrono::high_resolution_clock::now();
         if (chk_now > end_time) {
