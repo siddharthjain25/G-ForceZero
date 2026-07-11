@@ -753,7 +753,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     if (is_pv && ply < MAX_PLY) pv_length[ply] = 0;
 
     // Guard against excessive ply depth
-    if (ply >= MAX_PLY) return evaluate(board, acc);
+    if (ply >= MAX_PLY - 1) return evaluate(board, acc);
 
     if (!is_root && (board.isHalfMoveDraw() || board.isRepetition())) return 0;
 

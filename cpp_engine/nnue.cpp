@@ -46,7 +46,7 @@ int get_piece_idx(chess::Color perspective, chess::Piece piece) {
 }
 
 int get_feature_index(chess::Color perspective, chess::Piece piece, chess::Square sq, chess::Square king_sq) {
-    if (piece.type() == chess::PieceType::KING) return -1; // King has no feature
+    if (piece == chess::Piece::NONE || piece.type() == chess::PieceType::KING) return -1; // King has no feature
 
     int sq_idx = sq.index();
     int k_sq_idx = king_sq.index();
@@ -73,7 +73,7 @@ void refresh_accumulator(const chess::Board& board, chess::Color perspective, Ac
     
     for (int sq = 0; sq < 64; ++sq) {
         chess::Piece piece = board.at(chess::Square(sq));
-        if (piece.type() != chess::PieceType::NONE && piece.type() != chess::PieceType::KING) {
+        if (piece != chess::Piece::NONE && piece.type() != chess::PieceType::KING) {
             int idx = get_feature_index(perspective, piece, chess::Square(sq), king_sq);
             if (idx < 0 || idx >= NUM_FEATURES) std::cout << "INVALID IDX: " << idx << std::endl;
             const int16_t* weight = fc1_w[idx];
@@ -94,7 +94,7 @@ void init_accumulator(const chess::Board& board, Accumulator& acc) {
 }
 
 static void update_feature(const chess::Board& board, Accumulator& acc, chess::Piece piece, chess::Square sq, int sign) {
-    if (piece.type() == chess::PieceType::NONE || piece.type() == chess::PieceType::KING) return;
+    if (piece == chess::Piece::NONE || piece.type() == chess::PieceType::KING) return;
     
     chess::Square w_king_sq = board.kingSq(chess::Color::WHITE);
     chess::Square b_king_sq = board.kingSq(chess::Color::BLACK);
@@ -153,7 +153,7 @@ void update_accumulator(const chess::Board& board, const chess::Move& move, cons
     update_feature(board, next_acc, piece, from, -1);
     
     // 2. Handle captures (remove captured piece)
-    if (captured.type() != chess::PieceType::NONE) {
+    if (captured != chess::Piece::NONE) {
         update_feature(board, next_acc, captured, to, -1);
     } else if (move.typeOf() == chess::Move::ENPASSANT) {
         chess::Square cap_sq = chess::Square(to.index() + (board.sideToMove() == chess::Color::WHITE ? -8 : 8));
