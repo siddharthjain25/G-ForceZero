@@ -65,6 +65,9 @@ int get_feature_index(chess::Color perspective, chess::Piece piece, chess::Squar
 }
 
 void refresh_accumulator(const chess::Board& board, chess::Color perspective, Accumulator& acc) {
+    // Safety: don't crash if king is missing (can happen in search sub-trees)
+    if (!board.pieces(chess::PieceType::KING, perspective)) return;
+
     int16_t* target = (perspective == chess::Color::WHITE) ? acc.white : acc.black;
     const int16_t* bias = fc1_b;
     
@@ -102,7 +105,11 @@ void init_accumulator(const chess::Board& board, Accumulator& acc) {
 // We interleave W and B in the same loop body for cache and ILP benefit.
 static void update_feature(const chess::Board& board, Accumulator& acc, chess::Piece piece, chess::Square sq, int sign) {
     if (piece == chess::Piece::NONE || piece.type() == chess::PieceType::KING) return;
-    
+
+    // Safety: if either king is missing (e.g. king captured in search), bail out
+    if (!board.pieces(chess::PieceType::KING, chess::Color::WHITE) ||
+        !board.pieces(chess::PieceType::KING, chess::Color::BLACK)) return;
+
     chess::Square w_king_sq = board.kingSq(chess::Color::WHITE);
     chess::Square b_king_sq = board.kingSq(chess::Color::BLACK);
 
