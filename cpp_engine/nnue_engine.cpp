@@ -439,7 +439,9 @@ int classical_evaluate(const Board& board) {
         if (bc > 1) score += 10 * (bc - 1);
     }
 
-    // 5. Passed pawns
+    // 5. Passed pawns — exponential bonus: a passer on rank 6 is worth ~350 cp
+    int w_king_sq = board.kingSq(Color::WHITE).index();
+    int b_king_sq = board.kingSq(Color::BLACK).index();
     {
         Bitboard tmp = w_pawns;
         while (tmp) {
@@ -451,7 +453,15 @@ int classical_evaluate(const Board& board) {
                 if (f > 0) front |= 1ULL << (rr * 8 + f - 1);
                 if (f < 7) front |= 1ULL << (rr * 8 + f + 1);
             }
-            if (!(front & b_pawns.getBits())) score += 10 + 20 * (r - 1) * (r - 1);
+            if (!(front & b_pawns.getBits())) {
+                // Exponential rank bonus
+                int rank_bonus = (r - 1) * (r - 1) * (r - 1) * 10; // cubic
+                score += 10 + rank_bonus;
+                // King proximity: black king far = bigger threat
+                int bk_dist = std::abs(b_king_sq / 8 - r) + std::abs(b_king_sq % 8 - f);
+                int wk_dist = std::abs(w_king_sq / 8 - r) + std::abs(w_king_sq % 8 - f);
+                score += std::min(5, bk_dist - wk_dist) * 8;
+            }
         }
     }
     {
@@ -465,12 +475,20 @@ int classical_evaluate(const Board& board) {
                 if (f > 0) front |= 1ULL << (rr * 8 + f - 1);
                 if (f < 7) front |= 1ULL << (rr * 8 + f + 1);
             }
-            if (!(front & w_pawns.getBits())) score -= 10 + 20 * (6 - r) * (6 - r);
+            if (!(front & w_pawns.getBits())) {
+                int rank_bonus = (6 - r) * (6 - r) * (6 - r) * 10;
+                score -= 10 + rank_bonus;
+                // King proximity
+                int wk_dist = std::abs(w_king_sq / 8 - r) + std::abs(w_king_sq % 8 - f);
+                int bk_dist = std::abs(b_king_sq / 8 - r) + std::abs(b_king_sq % 8 - f);
+                score -= std::min(5, wk_dist - bk_dist) * 8;
+            }
         }
     }
 
-    // 6. King safety: pawn shield + attack zone
+    // 6. King safety: pawn shield + attack zone (scaled by game phase — less in endgame)
     {
+        double phase_factor = game_phase / 24.0; // 1.0 = opening, 0.0 = endgame
         auto king_safety = [&](Color us, Color them) -> int {
             int pen = 0;
             Square ksq = board.kingSq(us);
@@ -493,7 +511,7 @@ int classical_evaluate(const Board& board) {
                     if (board.isAttacked(Square(r2 * 8 + f2), them)) pen += 8;
                 }
             }
-            return pen;
+            return static_cast<int>(pen * phase_factor);
         };
         score -= king_safety(Color::WHITE, Color::BLACK);
         score += king_safety(Color::BLACK, Color::WHITE);
