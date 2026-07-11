@@ -8,14 +8,21 @@
 namespace nnue {
 
 // NNUE Configuration
-constexpr int NUM_FEATURES = 40960;
+constexpr int NUM_FEATURES = 41024;
 constexpr int HIDDEN_SIZE = 256;
 
 // Weights and biases
 alignas(32) extern int16_t fc1_w[NUM_FEATURES][HIDDEN_SIZE];
 alignas(32) extern int16_t fc1_b[HIDDEN_SIZE];
-alignas(32) extern int16_t fc2_w[1][HIDDEN_SIZE * 2];
-alignas(32) extern int32_t fc2_b[1];
+
+alignas(32) extern int32_t fc2_b[32];
+alignas(32) extern int8_t  fc2_w[32][HIDDEN_SIZE * 2];
+
+alignas(32) extern int32_t fc3_b[32];
+alignas(32) extern int8_t  fc3_w[32][32];
+
+alignas(32) extern int32_t fc4_b[1];
+alignas(32) extern int8_t  fc4_w[1][32];
 
 struct alignas(32) Accumulator {
     int16_t white[HIDDEN_SIZE];

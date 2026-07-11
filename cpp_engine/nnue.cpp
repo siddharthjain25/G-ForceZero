@@ -10,8 +10,15 @@ namespace nnue {
 
 alignas(32) int16_t fc1_w[NUM_FEATURES][HIDDEN_SIZE];
 alignas(32) int16_t fc1_b[HIDDEN_SIZE];
-alignas(32) int16_t fc2_w[1][HIDDEN_SIZE * 2];
-alignas(32) int32_t fc2_b[1];
+
+alignas(32) int32_t fc2_b[32];
+alignas(32) int8_t  fc2_w[32][HIDDEN_SIZE * 2];
+
+alignas(32) int32_t fc3_b[32];
+alignas(32) int8_t  fc3_w[32][32];
+
+alignas(32) int32_t fc4_b[1];
+alignas(32) int8_t  fc4_w[1][32];
 
 void load_weights(const std::string& filepath) {
     std::ifstream file(filepath, std::ios::binary);
@@ -19,20 +26,17 @@ void load_weights(const std::string& filepath) {
         throw std::runtime_error("Cannot open NNUE weights file: " + filepath);
     }
     
-    // Read fc1_w into a temporary buffer (saved as [HIDDEN_SIZE][NUM_FEATURES])
-    std::vector<int16_t> temp_fc1_w(NUM_FEATURES * HIDDEN_SIZE);
-    file.read(reinterpret_cast<char*>(temp_fc1_w.data()), temp_fc1_w.size() * sizeof(int16_t));
-    
-    // Transpose into [NUM_FEATURES][HIDDEN_SIZE]
-    for (int i = 0; i < HIDDEN_SIZE; ++i) {
-        for (int j = 0; j < NUM_FEATURES; ++j) {
-            fc1_w[j][i] = temp_fc1_w[i * NUM_FEATURES + j];
-        }
-    }
-    
+    file.read(reinterpret_cast<char*>(fc1_w), sizeof(fc1_w));
     file.read(reinterpret_cast<char*>(fc1_b), sizeof(fc1_b));
+    
     file.read(reinterpret_cast<char*>(fc2_w), sizeof(fc2_w));
     file.read(reinterpret_cast<char*>(fc2_b), sizeof(fc2_b));
+
+    file.read(reinterpret_cast<char*>(fc3_w), sizeof(fc3_w));
+    file.read(reinterpret_cast<char*>(fc3_b), sizeof(fc3_b));
+
+    file.read(reinterpret_cast<char*>(fc4_w), sizeof(fc4_w));
+    file.read(reinterpret_cast<char*>(fc4_b), sizeof(fc4_b));
     
     if (!file) {
         throw std::runtime_error("Error reading NNUE weights!");
@@ -57,7 +61,7 @@ int get_feature_index(chess::Color perspective, chess::Piece piece, chess::Squar
     }
     
     int pt_idx = get_piece_idx(perspective, piece);
-    return pt_idx * 4096 + k_sq_idx * 64 + sq_idx;
+    return k_sq_idx * 641 + pt_idx * 64 + sq_idx;
 }
 
 void refresh_accumulator(const chess::Board& board, chess::Color perspective, Accumulator& acc) {
@@ -192,44 +196,47 @@ void update_accumulator(const chess::Board& board, const chess::Move& move, cons
 }
 
 int evaluate(const Accumulator& acc, chess::Color side_to_move) {
-    __m256i zero = _mm256_setzero_si256();
-    __m256i max_val = _mm256_set1_epi16(256);
-    __m256i sum_vec = _mm256_setzero_si256();
+    const int16_t* us_acc   = (side_to_move == chess::Color::WHITE) ? acc.white : acc.black;
+    const int16_t* them_acc = (side_to_move == chess::Color::WHITE) ? acc.black : acc.white;
 
-    // Training used [white_acc, black_acc] → output positive for white winning.
-    const int16_t* w_acc = acc.white;
-    const int16_t* b_acc = acc.black;
-    const int16_t* fc2_w_w = fc2_w[0];
-    const int16_t* fc2_w_b = &fc2_w[0][HIDDEN_SIZE];
+    // Output buffers for layers
+    int8_t out2[32];
+    int8_t out3[32];
 
-    // Use aligned loads: all buffers declared with alignas(32)
-    for (int i = 0; i < HIDDEN_SIZE; i += 16) {
-        __m256i w = _mm256_load_si256(reinterpret_cast<const __m256i*>(&w_acc[i]));
-        __m256i b = _mm256_load_si256(reinterpret_cast<const __m256i*>(&b_acc[i]));
-        
-        __m256i w_clamped = _mm256_min_epi16(_mm256_max_epi16(w, zero), max_val);
-        __m256i b_clamped = _mm256_min_epi16(_mm256_max_epi16(b, zero), max_val);
-
-        // fc2_w is declared alignas(32), so aligned load is safe
-        __m256i ww = _mm256_load_si256(reinterpret_cast<const __m256i*>(&fc2_w_w[i]));
-        __m256i bw = _mm256_load_si256(reinterpret_cast<const __m256i*>(&fc2_w_b[i]));
-        
-        sum_vec = _mm256_add_epi32(sum_vec, _mm256_madd_epi16(w_clamped, ww));
-        sum_vec = _mm256_add_epi32(sum_vec, _mm256_madd_epi16(b_clamped, bw));
+    // Layer 2: 512 -> 32
+    for (int i = 0; i < 32; ++i) {
+        int32_t sum = fc2_b[i];
+        for (int j = 0; j < 256; ++j) {
+            // Clipped ReLU for inputs
+            int8_t us_val   = std::max(0, std::min(127, static_cast<int>(us_acc[j])));
+            int8_t them_val = std::max(0, std::min(127, static_cast<int>(them_acc[j])));
+            
+            sum += us_val * fc2_w[i][j];
+            sum += them_val * fc2_w[i][256 + j];
+        }
+        sum >>= 6; // divide by 64
+        out2[i] = static_cast<int8_t>(std::max(0, std::min(127, sum))); // Clipped ReLU
     }
 
-    // Horizontal reduction
-    __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(sum_vec), _mm256_extracti128_si256(sum_vec, 1));
-    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(1, 0, 3, 2)));
-    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(2, 3, 0, 1)));
-    
-    int32_t sum = _mm_cvtsi128_si32(sum128) + fc2_b[0];
+    // Layer 3: 32 -> 32
+    for (int i = 0; i < 32; ++i) {
+        int32_t sum = fc3_b[i];
+        for (int j = 0; j < 32; ++j) {
+            sum += out2[j] * fc3_w[i][j];
+        }
+        sum >>= 6;
+        out3[i] = static_cast<int8_t>(std::max(0, std::min(127, sum)));
+    }
 
-    // Quantization scaling: 256*64 = 16384. Training K=0.003 → cp = sum/(16384*0.003) ≈ sum/49
-    int raw_cp = sum / 49;
-    raw_cp = std::max(-2500, std::min(2500, raw_cp));
-    
-    return (side_to_move == chess::Color::WHITE) ? raw_cp : -raw_cp;
+    // Layer 4: 32 -> 1
+    int32_t final_sum = fc4_b[0];
+    for (int j = 0; j < 32; ++j) {
+        final_sum += out3[j] * fc4_w[0][j];
+    }
+
+    // Scale down by 16 to approximate standard centipawns
+    int raw_cp = final_sum / 16;
+    return raw_cp;
 }
 
 } // namespace nnue

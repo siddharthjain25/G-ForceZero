@@ -1328,7 +1328,7 @@ int main() {
     init_lmr_table();
     
     // Initialize NNUE weights
-    nnue::load_weights("nnue_weights.bin");
+    nnue::load_weights("raw.bin");
     std::cout << "G-ForceZero NNUE Engine ready.\n";
     std::cout.flush();
 
