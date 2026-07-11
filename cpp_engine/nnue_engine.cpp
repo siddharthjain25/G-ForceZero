@@ -148,8 +148,8 @@ int opt_nmp_base = 3;
 int opt_nmp_depth_div = 6;
 int opt_nmp_eval_div = 200;
 int opt_lmr_mult = 225; // 2.25 * 100
-int opt_fp_margin_base = 100;
-int opt_fp_margin_mult = 60;
+int opt_fp_margin_base = 232;
+int opt_fp_margin_mult = 217;
 int opt_nnue_weight = 60; // NNUE blend weight (0-100)
 
 // ─── LMR Table (precomputed) ──────────────────────────────────────────────────
