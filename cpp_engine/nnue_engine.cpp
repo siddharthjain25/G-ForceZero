@@ -34,6 +34,7 @@
 #include <cassert>
 #include "chess.hpp"
 #include "nnue.hpp"
+#include "polyglot.hpp"
 
 using namespace chess;
 
@@ -101,7 +102,7 @@ Move probe_tt_move(uint64_t hash) {
     return Move::NULL_MOVE;
 }
 
-bool probe_tt(uint64_t hash, int depth, int alpha, int beta, int& score, Move& tt_move) {
+bool probe_tt(uint64_t hash, int depth, int alpha, int beta, int& score, Move& tt_move, int& tt_depth, TTEntry::Flag& tt_flag, int& tt_eval) {
     int base = (hash & (TT_MASK >> 1)) * 2;
     uint16_t key = static_cast<uint16_t>(hash >> 48);
     for (int i = 0; i < 2; ++i) {
@@ -111,6 +112,11 @@ bool probe_tt(uint64_t hash, int depth, int alpha, int beta, int& score, Move& t
         
         if (tte.key != key || tte.flag == TTEntry::NONE) continue;
         if (tt_move == Move::NULL_MOVE && tte.move) tt_move = Move(tte.move);
+        
+        tt_depth = tte.depth;
+        tt_flag = static_cast<TTEntry::Flag>(tte.flag);
+        tt_eval = tte.score;
+        
         if (tte.depth >= depth) {
             if (tte.flag == TTEntry::EXACT) { score = tte.score; return true; }
             if (tte.flag == TTEntry::LOWER && tte.score >= beta)  { score = beta;  return true; }
@@ -135,8 +141,6 @@ int opt_fp_margin_mult = 60;
 Move  killer_moves[MAX_PLY][2];
 Move  counter_moves[64][64]; // [from][to] → killer response
 int   history_table[2][64][64]; // [color][from][to]
-int   continuation_history[12][64][12][64]; // [prev_piece][prev_to][curr_piece][curr_to]
-int   capture_history[12][64][6]; // [attacker_piece][to][victim_piecetype]
 
 std::atomic<bool> abort_search{false};
 std::chrono::time_point<std::chrono::high_resolution_clock> end_time;
@@ -495,23 +499,16 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 
     if (is_capture || is_promo) {
         int victim_val = 0;
-        int victim_pt = 0;
-        if (move.typeOf() == Move::ENPASSANT) {
-            victim_val = piece_values[0];
-            victim_pt = 0;
-        } else if (board.at(move.to()) != Piece::NONE) {
-            victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
-            victim_pt = static_cast<int>(board.at(move.to()).type().internal());
-        }
+        if (move.typeOf() == Move::ENPASSANT) victim_val = piece_values[0];
+        else if (board.at(move.to()) != Piece::NONE) victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
         if (is_promo) victim_val += piece_values[4];
 
         int attacker_val = piece_values[static_cast<int>(board.at(move.from()).type())];
         bool winning = see_ge(board, move, 0);
-        int cap_hist = capture_history[static_cast<int>(board.at(move.from()).internal())][move.to().index()][victim_pt];
         if (winning)
-            return 7'000'000 + victim_val * 10 - attacker_val + cap_hist;
+            return 7'000'000 + victim_val * 10 - attacker_val;
         else
-            return 1'000 + victim_val * 10 - attacker_val + cap_hist; // Losing captures below quiet
+            return 1'000 + victim_val * 10 - attacker_val; // Losing captures below quiet
     }
 
     // Killer moves
@@ -527,9 +524,6 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 
     // History heuristic
     int hist = history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()];
-    if (prev_move != Move::NULL_MOVE) {
-        hist += continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(move.from()).internal())][move.to().index()];
-    }
     return hist;
 }
 
@@ -546,7 +540,10 @@ void sort_moves(const Board& board, Movelist& moves, Move tt_move = Move::NULL_M
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
 int evaluate(const Board& board, const nnue::Accumulator& acc) {
-    return nnue::evaluate(acc, board.sideToMove());
+    int classical = classical_evaluate(board);
+    int nnue_score = nnue::evaluate(acc, board.sideToMove());
+    // 50% classical, 50% NNUE
+    return (classical + nnue_score) / 2;
 }
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
@@ -600,7 +597,7 @@ int quiescence(Board& board, int alpha, int beta, nnue::Accumulator acc, int ply
 }
 
 // ─── Negamax ─────────────────────────────────────────────────────────────────
-int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, nnue::Accumulator acc, Move prev_move = Move::NULL_MOVE) {
+int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, nnue::Accumulator acc, Move prev_move = Move::NULL_MOVE, Move excluded_move = Move::NULL_MOVE) {
     if ((nodes.load(std::memory_order_relaxed) & 4095) == 0 &&
         std::chrono::high_resolution_clock::now() > end_time)
         abort_search = true;
@@ -614,11 +611,17 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     if (!is_root && (board.isHalfMoveDraw() || board.isRepetition())) return 0;
 
     uint64_t hash = board.hash();
+    __builtin_prefetch(&TT[(hash & (TT_MASK >> 1)) * 2]);
+    
     Move tt_move = Move::NULL_MOVE;
+    int tt_depth = 0;
+    TTEntry::Flag tt_flag = TTEntry::NONE;
+    int tt_eval = 0;
 
     // TT probe
     int tt_score = 0;
-    if (!is_root && probe_tt(hash, depth, alpha, beta, tt_score, tt_move)) {
+    bool tt_hit = probe_tt(hash, depth, alpha, beta, tt_score, tt_move, tt_depth, tt_flag, tt_eval);
+    if (tt_hit && excluded_move == Move::NULL_MOVE && !is_root) {
         return tt_score;
     }
     if (tt_move == Move::NULL_MOVE) tt_move = probe_tt_move(hash);
@@ -671,6 +674,21 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         negamax(board, depth - 4, alpha, beta, ply, false, acc, prev_move);
         tt_move = probe_tt_move(hash);
     }
+    
+    // Singular Extensions
+    bool tt_is_singular = false;
+    if (!is_root && depth >= 8 && tt_move != Move::NULL_MOVE && 
+        excluded_move == Move::NULL_MOVE && 
+        tt_depth >= depth - 3 && 
+        tt_flag != TTEntry::UPPER && 
+        std::abs(tt_eval) < MATE_SCORE - 1000) 
+    {
+        int singular_beta = tt_eval - depth;
+        int singular_score = negamax(board, depth / 2, singular_beta - 1, singular_beta, ply, false, acc, prev_move, tt_move);
+        if (singular_score < singular_beta) {
+            tt_is_singular = true;
+        }
+    }
 
     Movelist moves;
     movegen::legalmoves(moves, board);
@@ -689,6 +707,8 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     int fp_margin = opt_fp_margin_base + (depth - 1) * opt_fp_margin_mult;
 
     for (const auto& move : moves) {
+        if (move == excluded_move) continue;
+
         bool is_capture  = board.isCapture(move) || move.typeOf() == Move::ENPASSANT;
         bool is_promo    = move.typeOf() == Move::PROMOTION;
 
@@ -703,6 +723,9 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         }
         move_count++;
         bool gives_check = board.inCheck();
+
+        int extension = 0;
+        if (tt_is_singular && move == tt_move) extension = 1;
 
         // Futility pruning (forward): skip quiet moves that can't improve alpha
         if (!is_root && !in_check && !gives_check && !is_capture && !is_promo
@@ -722,7 +745,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         int score;
         if (move_count == 1) {
             // PV node: full window
-            score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, true, next_acc, move);
+            score = -negamax(board, depth - 1 + extension, -beta, -alpha, ply + 1, true, next_acc, move);
         } else {
             // LMR: reduce late quiet moves
             bool do_lmr = move_count > 3 && depth >= 3 && !is_capture && !is_promo
@@ -730,29 +753,22 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
             int R = 0;
             if (do_lmr) {
                 R = 1 + static_cast<int>(std::log(depth) * std::log(move_count) * 100.0 / opt_lmr_mult);
-                // Don't reduce PV nodes or history-backed moves as much
-                if (is_pv) R--;
-                
-                int hist_score = history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()];
-                if (prev_move != Move::NULL_MOVE) {
-                    hist_score += continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(move.from()).internal())][move.to().index()];
-                }
-                R -= hist_score / 4096;
-
                 R = std::min(R, depth - 2);
                 R = std::max(R, 1);
+                // Don't reduce PV nodes or history-backed moves as much
+                if (is_pv) R--;
             }
 
             // Null-window search
-            score = -negamax(board, depth - 1 - R, -alpha - 1, -alpha, ply + 1, true, next_acc, move);
+            score = -negamax(board, depth - 1 - R + extension, -alpha - 1, -alpha, ply + 1, true, next_acc, move);
 
             // Full-depth re-search if LMR raised alpha or window failed
             if (score > alpha && (R > 0 || (!is_pv && score < beta))) {
-                score = -negamax(board, depth - 1, -alpha - 1, -alpha, ply + 1, true, next_acc, move);
+                score = -negamax(board, depth - 1 + extension, -alpha - 1, -alpha, ply + 1, true, next_acc, move);
             }
             // Full-window re-search for PV update
             if (score > alpha && score < beta) {
-                score = -negamax(board, depth - 1, -beta, -alpha, ply + 1, true, next_acc, move);
+                score = -negamax(board, depth - 1 + extension, -beta, -alpha, ply + 1, true, next_acc, move);
             }
         }
 
@@ -767,58 +783,24 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
         if (alpha >= beta) {
             // Update killers, counter-moves and history on cutoff
-            int bonus = depth * depth;
-            int max_bonus = 16384;
-            
-            if (!is_capture && !is_promo) {
-                if (ply < MAX_PLY && killer_moves[ply][0] != move) {
+            if (!is_capture && !is_promo && ply < MAX_PLY) {
+                if (killer_moves[ply][0] != move) {
                     killer_moves[ply][1] = killer_moves[ply][0];
                     killer_moves[ply][0] = move;
                 }
                 if (prev_move != Move::NULL_MOVE) {
                     counter_moves[prev_move.from().index()][prev_move.to().index()] = move;
                 }
-            }
-            
-            for (const auto& m : moves) {
-                if (m == move) {
-                    // This move caused cutoff (bonus)
-                    if (!is_capture && !is_promo) {
-                        history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()]
-                            += bonus - history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()] * bonus / max_bonus;
-                        if (prev_move != Move::NULL_MOVE) {
-                            continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()]
-                                += bonus - continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()] * bonus / max_bonus;
-                        }
-                    } else if (is_capture) {
-                        int victim_pt = (m.typeOf() == Move::ENPASSANT) ? 0 : static_cast<int>(board.at(m.to()).type().internal());
-                        capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt]
-                            += bonus - capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt] * bonus / max_bonus;
-                    }
-                    break; // Stop when we reach the cutoff move
-                } else {
-                    // This move was searched and didn't cause cutoff (penalty)
-                    bool m_is_capture = board.isCapture(m) || m.typeOf() == Move::ENPASSANT;
-                    bool m_is_promo = m.typeOf() == Move::PROMOTION;
-                    if (!m_is_capture && !m_is_promo) {
-                        history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()]
-                            -= bonus + history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()] * bonus / max_bonus;
-                        if (prev_move != Move::NULL_MOVE) {
-                            continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()]
-                                -= bonus + continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()] * bonus / max_bonus;
-                        }
-                    } else if (m_is_capture) {
-                        int victim_pt = (m.typeOf() == Move::ENPASSANT) ? 0 : static_cast<int>(board.at(m.to()).type().internal());
-                        capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt]
-                            -= bonus + capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt] * bonus / max_bonus;
-                    }
-                }
+                // History bonus: depth^2, with bonus scaled by depth
+                int bonus = depth * depth;
+                history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()]
+                    += bonus - history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()] * bonus / 16384;
             }
             break;
         }
     }
 
-    if (!abort_search) {
+    if (!abort_search && excluded_move == Move::NULL_MOVE) {
         TTEntry::Flag flag;
         if (best_score <= original_alpha) flag = TTEntry::UPPER;
         else if (best_score >= beta)      flag = TTEntry::LOWER;
@@ -883,17 +865,6 @@ Move search_best_move(Board& board, int target_ms) {
         for (auto& f : c)
             for (auto& t : f)
                 t >>= 1;
-
-    for (int p1 = 0; p1 < 12; ++p1)
-        for (int t1 = 0; t1 < 64; ++t1)
-            for (int p2 = 0; p2 < 12; ++p2)
-                for (int t2 = 0; t2 < 64; ++t2)
-                    continuation_history[p1][t1][p2][t2] >>= 1;
-
-    for (int p = 0; p < 12; ++p)
-        for (int t = 0; t < 64; ++t)
-            for (int pt = 0; pt < 6; ++pt)
-                capture_history[p][t][pt] >>= 1;
 
     std::fill(&killer_moves[0][0], &killer_moves[0][0] + sizeof(killer_moves) / sizeof(Move), Move::NULL_MOVE);
 
@@ -988,6 +959,7 @@ Move search_best_move(Board& board, int target_ms) {
 // ─── UCI Loop ─────────────────────────────────────────────────────────────────
 int main() {
     nnue::load_weights("nnue_weights.bin");
+    std::cout << "G-ForceZero NNUE Engine initialized.\n";
 
     chess::Board board;
     board.setFen(chess::constants::STARTPOS);
@@ -1038,8 +1010,6 @@ int main() {
             board.setFen(chess::constants::STARTPOS);
             tt_clear();
             std::fill(&history_table[0][0][0], &history_table[0][0][0] + sizeof(history_table) / sizeof(int), 0);
-            std::fill(&continuation_history[0][0][0][0], &continuation_history[0][0][0][0] + sizeof(continuation_history) / sizeof(int), 0);
-            std::fill(&capture_history[0][0][0], &capture_history[0][0][0] + sizeof(capture_history) / sizeof(int), 0);
             std::fill(&counter_moves[0][0], &counter_moves[0][0] + sizeof(counter_moves) / sizeof(Move), Move::NULL_MOVE);
         } else if (command == "position") {
             std::string token;
@@ -1093,9 +1063,16 @@ int main() {
                 target_ms = 5000; // Analysis mode
             }
 
-            chess::Move best = search_best_move(board, target_ms);
-            std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
-            std::cout.flush();
+            chess::Move best = get_book_move(board, "book.bin");
+            if (best != chess::Move::NULL_MOVE) {
+                std::cout << "info string Playing from PolyGlot opening book\n";
+                std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
+                std::cout.flush();
+            } else {
+                best = search_best_move(board, target_ms);
+                std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
+                std::cout.flush();
+            }
         } else if (command == "quit") {
             break;
         }
