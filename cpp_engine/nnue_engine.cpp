@@ -144,8 +144,8 @@ int num_threads = 1;
 
 // ─── Tunable Search Parameters ────────────────────────────────────────────────
 int opt_rfp_margin = 80;
-int opt_nmp_base = 3;
-int opt_nmp_depth_div = 6;
+int opt_nmp_base = 4;
+int opt_nmp_depth_div = 3;
 int opt_nmp_eval_div = 200;
 int opt_lmr_mult = 225; // 2.25 * 100
 int opt_fp_margin_base = 232;
