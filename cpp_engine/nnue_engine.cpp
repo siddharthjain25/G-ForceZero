@@ -605,8 +605,6 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     if (!is_root && (board.isHalfMoveDraw() || board.isRepetition())) return 0;
 
     uint64_t hash = board.hash();
-    __builtin_prefetch(&TT[(hash & (TT_MASK >> 1)) * 2]);
-    
     Move tt_move = Move::NULL_MOVE;
 
     // TT probe
@@ -656,15 +654,6 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
                 if (null_score >= MATE_SCORE - 100) null_score = beta;
                 return null_score;
             }
-        }
-    }
-
-    // ProbCut
-    if (!is_pv && !in_check && depth >= 5 && std::abs(beta) <= MATE_SCORE - 100) {
-        int rbeta = std::min(MATE_SCORE - 100, beta + 200);
-        int probcut_score = -negamax(board, depth - 4, -rbeta, -rbeta + 1, ply, false, acc, prev_move);
-        if (probcut_score >= rbeta) {
-            return probcut_score;
         }
     }
 
