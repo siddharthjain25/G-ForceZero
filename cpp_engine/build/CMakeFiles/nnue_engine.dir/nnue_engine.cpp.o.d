@@ -192,7 +192,13 @@ CMakeFiles/nnue_engine.dir/nnue_engine.cpp.o: \
  /usr/include/c++/16/tr1/poly_hermite.tcc \
  /usr/include/c++/16/tr1/poly_laguerre.tcc \
  /usr/include/c++/16/tr1/riemann_zeta.tcc /usr/include/c++/16/cassert \
- /usr/include/assert.h \
+ /usr/include/assert.h /usr/include/c++/16/climits \
+ /usr/lib/gcc/x86_64-redhat-linux/16/include/limits.h \
+ /usr/lib/gcc/x86_64-redhat-linux/16/include/syslimits.h \
+ /usr/include/limits.h /usr/include/bits/posix1_lim.h \
+ /usr/include/bits/local_lim.h /usr/include/linux/limits.h \
+ /usr/include/bits/posix2_lim.h /usr/include/bits/xopen_lim.h \
+ /usr/include/bits/uio_lim.h \
  /home/sid/Documents/GitHub/G-ForceZero/cpp_engine/chess.hpp \
  /usr/include/c++/16/functional /usr/include/c++/16/bits/std_function.h \
  /usr/include/c++/16/unordered_map \

@@ -36,6 +36,7 @@
 #include <cstring>
 #include <cmath>
 #include <cassert>
+#include <climits>
 #include "chess.hpp"
 #include "nnue.hpp"
 #include "polyglot.hpp"
@@ -151,11 +152,13 @@ int opt_fp_margin_mult = 217;
 int opt_nnue_weight = 60; // NNUE blend weight (0-100)
 
 // ─── LMR Table (precomputed) ──────────────────────────────────────────────────
-int lmr_table[MAX_PLY][64]; // [depth][move_count]
+int8_t lmr_table[MAX_PLY][64]; // [depth][move_count] — int8_t to fit in L1 cache
 void init_lmr_table() {
     for (int d = 1; d < MAX_PLY; ++d)
-        for (int m = 1; m < 64; ++m)
-            lmr_table[d][m] = static_cast<int>(std::log(d) * std::log(m) * 100.0 / opt_lmr_mult);
+        for (int m = 1; m < 64; ++m) {
+            int v = static_cast<int>(std::log(d) * std::log(m) * 100.0 / opt_lmr_mult);
+            lmr_table[d][m] = static_cast<int8_t>(std::min(v, 63));
+        }
 }
 
 // ─── Search State ─────────────────────────────────────────────────────────────
@@ -176,86 +179,67 @@ int  pv_length[MAX_PLY];
 
 // ─── Proper Full SEE ──────────────────────────────────────────────────────────
 // Returns the least-valuable attacker of `to` by `stm`, removing it from `occ`
-static inline int lva_attacker(const Board& board, Square to, Color stm, Bitboard& occ, Square& attacker_sq) {
-    Bitboard to_bb = Bitboard(1ULL << to.index());
-    
+static inline int lva_attacker(const Board& board, Square to, Color stm, Bitboard& occ) {
     // Pawns
     {
         Bitboard pawns = board.pieces(PieceType::PAWN, stm) & occ;
         Bitboard pawn_atk = attacks::pawn(~stm, to) & pawns;
         if (pawn_atk) {
             int sq = pawn_atk.lsb();
-            attacker_sq = Square(sq);
             occ ^= Bitboard(1ULL << sq);
             return piece_values[0];
         }
     }
-    // Knights
+    // Knights — use reverse attack lookup: which knights attack `to`?
     {
         Bitboard knights = board.pieces(PieceType::KNIGHT, stm) & occ;
-        while (knights) {
-            int sq = knights.pop();
-            Bitboard atk = attacks::knight(Square(sq));
-            if (atk & to_bb) {
-                attacker_sq = Square(sq);
-                occ ^= Bitboard(1ULL << sq);
-                return piece_values[1];
-            }
+        Bitboard atkers  = attacks::knight(to) & knights; // O(1) lookup
+        if (atkers) {
+            int sq = atkers.lsb();
+            occ ^= Bitboard(1ULL << sq);
+            return piece_values[1];
         }
     }
     // Bishops
     {
         Bitboard bishops = board.pieces(PieceType::BISHOP, stm) & occ;
-        while (bishops) {
-            int sq = bishops.pop();
-            Bitboard atk = attacks::bishop(Square(sq), occ);
-            if (atk & to_bb) {
-                attacker_sq = Square(sq);
-                occ ^= Bitboard(1ULL << sq);
-                return piece_values[2];
-            }
+        Bitboard atkers  = attacks::bishop(to, occ) & bishops;
+        if (atkers) {
+            int sq = atkers.lsb();
+            occ ^= Bitboard(1ULL << sq);
+            return piece_values[2];
         }
     }
     // Rooks
     {
-        Bitboard rooks = board.pieces(PieceType::ROOK, stm) & occ;
-        while (rooks) {
-            int sq = rooks.pop();
-            Bitboard atk = attacks::rook(Square(sq), occ);
-            if (atk & to_bb) {
-                attacker_sq = Square(sq);
-                occ ^= Bitboard(1ULL << sq);
-                return piece_values[3];
-            }
+        Bitboard rooks  = board.pieces(PieceType::ROOK, stm) & occ;
+        Bitboard atkers = attacks::rook(to, occ) & rooks;
+        if (atkers) {
+            int sq = atkers.lsb();
+            occ ^= Bitboard(1ULL << sq);
+            return piece_values[3];
         }
     }
     // Queens
     {
         Bitboard queens = board.pieces(PieceType::QUEEN, stm) & occ;
-        while (queens) {
-            int sq = queens.pop();
-            Bitboard atk = attacks::queen(Square(sq), occ);
-            if (atk & to_bb) {
-                attacker_sq = Square(sq);
-                occ ^= Bitboard(1ULL << sq);
-                return piece_values[4];
-            }
+        Bitboard atkers = attacks::queen(to, occ) & queens;
+        if (atkers) {
+            int sq = atkers.lsb();
+            occ ^= Bitboard(1ULL << sq);
+            return piece_values[4];
         }
     }
     // King
     {
-        Bitboard king = board.pieces(PieceType::KING, stm) & occ;
-        if (king) {
-            int sq = king.lsb();
-            Bitboard atk = attacks::king(Square(sq));
-            if (atk & to_bb) {
-                attacker_sq = Square(sq);
-                occ ^= Bitboard(1ULL << sq);
-                return piece_values[5];
-            }
+        Bitboard king   = board.pieces(PieceType::KING, stm) & occ;
+        Bitboard atkers = attacks::king(to) & king;
+        if (atkers) {
+            int sq = atkers.lsb();
+            occ ^= Bitboard(1ULL << sq);
+            return piece_values[5];
         }
     }
-    attacker_sq = Square::NO_SQ;
     return INF; // no attacker
 }
 
@@ -298,12 +282,11 @@ int static_exchange_eval(const Board& board, Move move) {
 
     while (true) {
         d++;
-        if (d >= 31) break; // Safety limit (max 32 pieces can participate in capture)
+        if (d >= 31) break;
         gain[d] = attacker_val - gain[d - 1];
 
-        Square attacker_sq;
-        int new_val = lva_attacker(board, to, stm, occ, attacker_sq);
-        if (attacker_sq == Square::NO_SQ) break;
+        int new_val = lva_attacker(board, to, stm, occ);
+        if (new_val == INF) break; // no attacker
 
         attacker_val = new_val;
         stm = ~stm;
@@ -609,19 +592,18 @@ static inline int piece_idx(const Board& board, Square sq) {
 }
 
 // ─── Move Scoring for Ordering ────────────────────────────────────────────────
-int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move prev_move, Move prev_prev_move) {
+// Returns encoded score. For captures, also outputs the pre-computed SEE value
+// so callers can reuse it without recomputing.
+int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move prev_move, Move prev_prev_move, int& see_out) {
+    see_out = INT_MIN; // sentinel: not a capture
     if (move == tt_move) return 10'000'000;
 
     bool is_capture = board.isCapture(move) || move.typeOf() == Move::ENPASSANT;
     bool is_promo   = move.typeOf() == Move::PROMOTION;
 
     if (is_capture || is_promo) {
-        int victim_val = 0;
-        if (move.typeOf() == Move::ENPASSANT) victim_val = piece_values[0];
-        else if (board.at(move.to()) != Piece::NONE) victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
-        if (is_promo) victim_val += piece_values[4];
-
         int see_val = static_exchange_eval(board, move);
+        see_out = see_val;  // cache for reuse in pruning
         if (see_val >= 0)
             return 7'000'000 + see_val;
         else
@@ -645,7 +627,7 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
     // Continuation history (1-ply)
     int cont1 = 0;
     if (prev_move != Move::NULL_MOVE) {
-        int prev_piece = piece_idx(board, prev_move.to()); // After move, piece is at prev_move.to()
+        int prev_piece = piece_idx(board, prev_move.to());
         int cur_piece  = piece_idx(board, move.from());
         cont1 = cont_hist[prev_piece][prev_move.to().index()][cur_piece][move.to().index()];
     }
@@ -665,12 +647,13 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 struct ScoredMove {
     Move move;
     int  score;
+    int  see;   // pre-computed SEE for captures; INT_MIN for quiets
 };
 
 void score_moves(const Board& board, const Movelist& moves, ScoredMove* scored, int n, Move tt_move, int ply, Move prev_move, Move prev_prev_move) {
     for (int i = 0; i < n; ++i) {
         scored[i].move  = moves[i];
-        scored[i].score = score_move(board, moves[i], tt_move, ply, prev_move, prev_prev_move);
+        scored[i].score = score_move(board, moves[i], tt_move, ply, prev_move, prev_prev_move, scored[i].see);
     }
 }
 
@@ -685,9 +668,7 @@ void partial_sort_next(ScoredMove* scored, int start, int n) {
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
 int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, int ply = 0) {
-    if ((nodes.load(std::memory_order_relaxed) & 4095) == 0 &&
-        std::chrono::high_resolution_clock::now() > end_time)
-        abort_search = true;
+    // Use the centrally-managed abort flag set by negamax's time check
     if (abort_search) return 0;
 
     nodes.fetch_add(1, std::memory_order_relaxed);
@@ -712,8 +693,10 @@ int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, 
         partial_sort_next(scored, i, n);
         Move move = scored[i].move;
         
-        // Skip losing captures (SEE < 0)
-        if (!see_ge(board, move, 0)) continue;
+        // Skip losing captures (SEE < 0) — SEE already computed in scored[i].see
+        int see_val = scored[i].see;
+        if (see_val != INT_MIN && see_val < 0) continue;
+        if (see_val == INT_MIN && !see_ge(board, move, 0)) continue;
 
         // Per-move delta pruning
         int capt_val = (move.typeOf() == Move::ENPASSANT) ? piece_values[0] :
@@ -721,12 +704,15 @@ int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, 
         if (move.typeOf() == Move::PROMOTION) capt_val += piece_values[4];
         if (stand_pat + capt_val + 200 < alpha) continue;
 
+        bool is_king_move = (board.at(move.from()).type() == chess::PieceType::KING);
         nnue::Accumulator next_acc;
-        chess::Piece piece = board.at(move.from());
-        nnue::update_accumulator(board, move, acc, next_acc);
+        if (!is_king_move) {
+            chess::Piece piece = board.at(move.from());
+            nnue::update_accumulator(board, move, acc, next_acc);
+        }
 
         board.makeMove(move);
-        if (piece.type() == chess::PieceType::KING) {
+        if (is_king_move) {
             nnue::refresh_accumulator(board, ~board.sideToMove(), next_acc);
             nnue::refresh_accumulator(board, board.sideToMove(), next_acc);
         }
@@ -776,7 +762,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     if (tt_hit && excluded_move == Move::NULL_MOVE && !is_root) {
         return tt_score;
     }
-    if (tt_move == Move::NULL_MOVE) tt_move = probe_tt_move(hash);
+    // probe_tt already fills tt_move from both buckets; no second scan needed.
 
     // Internal Iterative Reduction (IIR) - from Stockfish
     if (depth >= 6 && tt_move == Move::NULL_MOVE && !is_pv) {
@@ -829,11 +815,13 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
     // Null-move pruning
     if (allow_null && !is_pv && !in_check && ply > 0 && depth >= 3 && excluded_move == Move::NULL_MOVE) {
-        bool has_pieces = board.pieces(PieceType::KNIGHT).count() +
-                          board.pieces(PieceType::BISHOP).count() +
-                          board.pieces(PieceType::ROOK).count() +
-                          board.pieces(PieceType::QUEEN).count() > 0;
-        if (has_pieces && static_eval >= beta) {
+        // Avoid NMP in pure pawn/king endgames (zugzwang risk)
+        // Use bitboard OR to check in one operation
+        Bitboard non_pawn_kings = board.pieces(PieceType::KNIGHT) |
+                                  board.pieces(PieceType::BISHOP) |
+                                  board.pieces(PieceType::ROOK)   |
+                                  board.pieces(PieceType::QUEEN);
+        if (non_pawn_kings && static_eval >= beta) {
             int R = opt_nmp_base + depth / opt_nmp_depth_div + std::min(3, (static_eval - beta) / opt_nmp_eval_div);
             board.makeNullMove();
             int null_score = -negamax(board, depth - 1 - R, -beta, -beta + 1, ply + 1, false, acc, Move::NULL_MOVE, prev_move);
@@ -899,14 +887,47 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
         bool is_capture  = board.isCapture(move) || move.typeOf() == Move::ENPASSANT;
         bool is_promo    = move.typeOf() == Move::PROMOTION;
+        chess::Piece piece = board.at(move.from());
+        bool is_king_move  = (piece.type() == chess::PieceType::KING);
+
+        // ── Pre-makeMove pruning (saves expensive board update for pruned moves) ──
+        if (!is_root && !in_check && move_count > 1 && excluded_move == Move::NULL_MOVE) {
+            if (!is_capture && !is_promo) {
+                // Futility pruning: skip quiet moves that can't improve alpha
+                if (depth <= 8 && static_eval + fp_margin <= alpha) continue;
+
+                // Late move pruning: skip very late quiet moves at low depth
+                if (!is_pv && depth <= 4 && move_count > 4 + depth * depth) continue;
+
+                // SEE pruning for quiet moves at low depth
+                if (!is_pv && depth <= 6 && !see_ge(board, move, -depth * 60)) continue;
+
+                // Continuation history based pruning
+                if (!is_pv && depth <= 6 && prev_move != Move::NULL_MOVE) {
+                    int cp = (piece.color() == chess::Color::WHITE ? 0 : 6) + static_cast<int>(piece.type());
+                    int pp;
+                    if (move.from() == prev_move.to()) {
+                        pp = cp;
+                    } else {
+                        chess::Piece prev_p = board.at(prev_move.to());
+                        pp = prev_p == chess::Piece::NONE ? 0 : ((prev_p.color() == chess::Color::WHITE ? 0 : 6) + static_cast<int>(prev_p.type()));
+                    }
+                    if (cont_hist[pp][prev_move.to().index()][cp][move.to().index()] < -2000 * depth) continue;
+                }
+            } else if (is_capture && !is_promo && move_count > 1 && depth <= 6) {
+                // SEE pruning for losing captures — reuse cached SEE from ordering
+                int see_val = scored[mi].see;
+                if (see_val == INT_MIN) see_val = static_exchange_eval(board, move);
+                if (see_val < -depth * 100) continue;
+            }
+        }
+
         if (!is_capture && !is_promo && num_quiets < 64) {
             quiets_searched[num_quiets++] = move;
         }
 
-        // Detect king move BEFORE copying accumulator to save a wasted 512B copy
-        bool is_king_move = (board.at(move.from()).type() == chess::PieceType::KING);
+        // Update NNUE accumulator (lazy for king moves)
         nnue::Accumulator next_acc;
-        chess::Piece piece = board.at(move.from());
         if (!is_king_move) {
             nnue::update_accumulator(board, move, acc, next_acc);
         }
@@ -918,54 +939,15 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         }
         bool gives_check = board.inCheck();
 
-        // Extensions: only apply when not too deep (prevent runaway extension loops)
+        // Extensions: only apply when not too deep
         int extension = 0;
         if (ply < MAX_PLY * 2 / 3) {
             if (tt_is_singular && move == tt_move) extension = 1;
         }
 
-        // Futility pruning (forward): skip quiet moves that can't improve alpha
+        // Post-makeMove futility pruning for checks discovered during search
         if (!is_root && !in_check && !gives_check && !is_capture && !is_promo
-            && depth <= 8 && move_count > 1)
-        {
-            if (static_eval + fp_margin <= alpha) {
-                board.unmakeMove(move);
-                continue;
-            }
-            // Late move pruning: skip very late quiet moves at low depth
-            if (!is_pv && depth <= 4 && move_count > 4 + depth * depth) {
-                board.unmakeMove(move);
-                continue;
-            }
-            // SEE pruning for quiet moves at low depth
-            if (!is_pv && depth <= 6 && !see_ge(board, move, -depth * 60)) {
-                board.unmakeMove(move);
-                continue;
-            }
-            
-            // Continuation history based pruning (from Stockfish)
-            if (!is_pv && depth <= 6 && prev_move != Move::NULL_MOVE) {
-                // `piece` was saved before makeMove.
-                int cp = (piece.color() == chess::Color::WHITE ? 0 : 6) + static_cast<int>(piece.type());
-                int pp;
-                if (move.from() == prev_move.to()) {
-                    pp = cp; // Same piece moved twice
-                } else {
-                    chess::Piece prev_p = board.at(prev_move.to());
-                    pp = prev_p == chess::Piece::NONE ? 0 : ((prev_p.color() == chess::Color::WHITE ? 0 : 6) + static_cast<int>(prev_p.type()));
-                }
-                
-                int hist = cont_hist[pp][prev_move.to().index()][cp][move.to().index()];
-                if (hist < -2000 * depth) { // Our history scores cap around 16k
-                    board.unmakeMove(move);
-                    continue;
-                }
-            }
-        }
-        
-        // SEE pruning for losing captures at depth <= 6
-        if (!is_root && is_capture && !is_promo && move_count > 1 && depth <= 6 &&
-            !see_ge(board, move, -depth * 100)) {
+            && depth <= 8 && move_count > 1 && static_eval + fp_margin <= alpha) {
             board.unmakeMove(move);
             continue;
         }
@@ -1313,8 +1295,23 @@ Move search_best_move(Board& board, int soft_limit, int hard_limit) {
         // Stop early if mate found
         if (score > MATE_SCORE - 200 || score < -MATE_SCORE + 200) break;
         
-        // Time management: stop when soft limit is reached
-        if (elapsed_ms >= soft_limit) { abort_search = true; break; }
+        // Time management: smart soft-limit based on elapsed + stability
+        auto now_check = std::chrono::high_resolution_clock::now();
+        int elapsed_check = static_cast<int>(
+            std::chrono::duration<double>(now_check - start).count() * 1000);
+
+        // Stability bonus: if best move hasn't changed for 3+ depths, stop earlier
+        int effective_soft = soft_limit;
+        if (best_move_stable_count >= 3) effective_soft = soft_limit * 6 / 10;
+
+        if (elapsed_check >= effective_soft) { abort_search = true; break; }
+
+        // Emergency: if we used >55% of soft budget and next depth will likely
+        // exceed it (depth took more than 30% of soft), abort now
+        if (elapsed_check > soft_limit * 55 / 100 && depth >= 6) {
+            abort_search = true;
+            break;
+        }
     }
 
     // Safety: if somehow no move was found, play first legal
@@ -1440,21 +1437,55 @@ int main() {
             } else if (wtime > 0 || btime > 0) {
                 int my_time = (board.sideToMove() == chess::Color::WHITE) ? wtime : btime;
                 int my_inc  = (board.sideToMove() == chess::Color::WHITE) ? winc  : binc;
-                int moves_left = (movestogo > 0) ? movestogo : 40;
-                
-                // Improved time management:
-                // soft = base allocation + increment, hard = emergency ceiling
-                soft_limit = my_time / moves_left + (my_inc * 3) / 4;
-                hard_limit = std::min(my_time / 3, soft_limit * 5); // Hard limit is up to 5x soft
-                
-                // Don't use more than 80% of remaining time in a single move
-                hard_limit = std::min(hard_limit, my_time * 4 / 5 - MOVE_OVERHEAD);
+
+                // Emergency: if nearly out of time, respond instantly
+                if (my_time < 100) {
+                    chess::Move best = get_book_move(board, "book.bin");
+                    if (best == chess::Move::NULL_MOVE) {
+                        chess::Movelist ml;
+                        chess::movegen::legalmoves(ml, board);
+                        if (!ml.empty()) best = ml[0];
+                    }
+                    std::cout << "bestmove " << chess::uci::moveToUci(best) << "\n";
+                    std::cout.flush();
+                    continue;
+                }
+
+                // Smart time allocation:
+                // moves_left: use movestogo if given, else estimate based on remaining time
+                // In low-time situations, be more conservative (fewer moves_left assumed)
+                int moves_left;
+                if (movestogo > 0) {
+                    moves_left = movestogo;
+                } else {
+                    // Heuristic: assume 30 moves left in the game, but clamp based on time
+                    // Low time → assume fewer moves so we spend less per move
+                    moves_left = 30;
+                    if (my_time < 5000)  moves_left = 20;
+                    if (my_time < 2000)  moves_left = 15;
+                    if (my_time < 1000)  moves_left = 10;
+                }
+
+                // Base soft limit: proportional share + increment bonus
+                int base = my_time / moves_left + (my_inc * 2) / 3;
+
+                // Soft limit: don't exceed 20% of remaining time on one move
+                soft_limit = std::min(base, my_time / 5);
+
+                // Hard limit: absolute ceiling — never use more than 25% of clock
+                hard_limit = std::min({
+                    soft_limit * 4,           // up to 4× soft
+                    my_time / 4,              // 25% of remaining time
+                    my_time - MOVE_OVERHEAD   // leave at least overhead
+                });
             } else {
                 soft_limit = 5000; // Analysis mode
                 hard_limit = 5000;
             }
-            soft_limit = std::max(50, soft_limit - MOVE_OVERHEAD);
-            hard_limit = std::max(50, hard_limit - MOVE_OVERHEAD);
+            soft_limit = std::max(20, soft_limit - MOVE_OVERHEAD);
+            hard_limit = std::max(20, hard_limit - MOVE_OVERHEAD);
+            // Sanity: hard must be >= soft
+            hard_limit = std::max(hard_limit, soft_limit);
 
             chess::Move best = get_book_move(board, "book.bin");
             if (best != chess::Move::NULL_MOVE) {
