@@ -135,6 +135,8 @@ int opt_fp_margin_mult = 60;
 Move  killer_moves[MAX_PLY][2];
 Move  counter_moves[64][64]; // [from][to] → killer response
 int   history_table[2][64][64]; // [color][from][to]
+int   continuation_history[12][64][12][64]; // [prev_piece][prev_to][curr_piece][curr_to]
+int   capture_history[12][64][6]; // [attacker_piece][to][victim_piecetype]
 
 std::atomic<bool> abort_search{false};
 std::chrono::time_point<std::chrono::high_resolution_clock> end_time;
@@ -493,16 +495,23 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 
     if (is_capture || is_promo) {
         int victim_val = 0;
-        if (move.typeOf() == Move::ENPASSANT) victim_val = piece_values[0];
-        else if (board.at(move.to()) != Piece::NONE) victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
+        int victim_pt = 0;
+        if (move.typeOf() == Move::ENPASSANT) {
+            victim_val = piece_values[0];
+            victim_pt = 0;
+        } else if (board.at(move.to()) != Piece::NONE) {
+            victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
+            victim_pt = static_cast<int>(board.at(move.to()).type().internal());
+        }
         if (is_promo) victim_val += piece_values[4];
 
         int attacker_val = piece_values[static_cast<int>(board.at(move.from()).type())];
         bool winning = see_ge(board, move, 0);
+        int cap_hist = capture_history[static_cast<int>(board.at(move.from()).internal())][move.to().index()][victim_pt];
         if (winning)
-            return 7'000'000 + victim_val * 10 - attacker_val;
+            return 7'000'000 + victim_val * 10 - attacker_val + cap_hist;
         else
-            return 1'000 + victim_val * 10 - attacker_val; // Losing captures below quiet
+            return 1'000 + victim_val * 10 - attacker_val + cap_hist; // Losing captures below quiet
     }
 
     // Killer moves
@@ -518,6 +527,9 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 
     // History heuristic
     int hist = history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()];
+    if (prev_move != Move::NULL_MOVE) {
+        hist += continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(move.from()).internal())][move.to().index()];
+    }
     return hist;
 }
 
@@ -534,10 +546,7 @@ void sort_moves(const Board& board, Movelist& moves, Move tt_move = Move::NULL_M
 
 // ─── Evaluation ───────────────────────────────────────────────────────────────
 int evaluate(const Board& board, const nnue::Accumulator& acc) {
-    int classical = classical_evaluate(board);
-    int nnue_score = nnue::evaluate(acc, board.sideToMove());
-    // 50% classical, 50% NNUE
-    return (classical + nnue_score) / 2;
+    return nnue::evaluate(acc, board.sideToMove());
 }
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
@@ -721,10 +730,17 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
             int R = 0;
             if (do_lmr) {
                 R = 1 + static_cast<int>(std::log(depth) * std::log(move_count) * 100.0 / opt_lmr_mult);
-                R = std::min(R, depth - 2);
-                R = std::max(R, 1);
                 // Don't reduce PV nodes or history-backed moves as much
                 if (is_pv) R--;
+                
+                int hist_score = history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()];
+                if (prev_move != Move::NULL_MOVE) {
+                    hist_score += continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(move.from()).internal())][move.to().index()];
+                }
+                R -= hist_score / 4096;
+
+                R = std::min(R, depth - 2);
+                R = std::max(R, 1);
             }
 
             // Null-window search
@@ -751,18 +767,52 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
         if (alpha >= beta) {
             // Update killers, counter-moves and history on cutoff
-            if (!is_capture && !is_promo && ply < MAX_PLY) {
-                if (killer_moves[ply][0] != move) {
+            int bonus = depth * depth;
+            int max_bonus = 16384;
+            
+            if (!is_capture && !is_promo) {
+                if (ply < MAX_PLY && killer_moves[ply][0] != move) {
                     killer_moves[ply][1] = killer_moves[ply][0];
                     killer_moves[ply][0] = move;
                 }
                 if (prev_move != Move::NULL_MOVE) {
                     counter_moves[prev_move.from().index()][prev_move.to().index()] = move;
                 }
-                // History bonus: depth^2, with bonus scaled by depth
-                int bonus = depth * depth;
-                history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()]
-                    += bonus - history_table[static_cast<int>(board.sideToMove())][move.from().index()][move.to().index()] * bonus / 16384;
+            }
+            
+            for (const auto& m : moves) {
+                if (m == move) {
+                    // This move caused cutoff (bonus)
+                    if (!is_capture && !is_promo) {
+                        history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()]
+                            += bonus - history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()] * bonus / max_bonus;
+                        if (prev_move != Move::NULL_MOVE) {
+                            continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()]
+                                += bonus - continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()] * bonus / max_bonus;
+                        }
+                    } else if (is_capture) {
+                        int victim_pt = (m.typeOf() == Move::ENPASSANT) ? 0 : static_cast<int>(board.at(m.to()).type().internal());
+                        capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt]
+                            += bonus - capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt] * bonus / max_bonus;
+                    }
+                    break; // Stop when we reach the cutoff move
+                } else {
+                    // This move was searched and didn't cause cutoff (penalty)
+                    bool m_is_capture = board.isCapture(m) || m.typeOf() == Move::ENPASSANT;
+                    bool m_is_promo = m.typeOf() == Move::PROMOTION;
+                    if (!m_is_capture && !m_is_promo) {
+                        history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()]
+                            -= bonus + history_table[static_cast<int>(board.sideToMove())][m.from().index()][m.to().index()] * bonus / max_bonus;
+                        if (prev_move != Move::NULL_MOVE) {
+                            continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()]
+                                -= bonus + continuation_history[static_cast<int>(board.at(prev_move.to()).internal())][prev_move.to().index()][static_cast<int>(board.at(m.from()).internal())][m.to().index()] * bonus / max_bonus;
+                        }
+                    } else if (m_is_capture) {
+                        int victim_pt = (m.typeOf() == Move::ENPASSANT) ? 0 : static_cast<int>(board.at(m.to()).type().internal());
+                        capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt]
+                            -= bonus + capture_history[static_cast<int>(board.at(m.from()).internal())][m.to().index()][victim_pt] * bonus / max_bonus;
+                    }
+                }
             }
             break;
         }
@@ -833,6 +883,17 @@ Move search_best_move(Board& board, int target_ms) {
         for (auto& f : c)
             for (auto& t : f)
                 t >>= 1;
+
+    for (int p1 = 0; p1 < 12; ++p1)
+        for (int t1 = 0; t1 < 64; ++t1)
+            for (int p2 = 0; p2 < 12; ++p2)
+                for (int t2 = 0; t2 < 64; ++t2)
+                    continuation_history[p1][t1][p2][t2] >>= 1;
+
+    for (int p = 0; p < 12; ++p)
+        for (int t = 0; t < 64; ++t)
+            for (int pt = 0; pt < 6; ++pt)
+                capture_history[p][t][pt] >>= 1;
 
     std::fill(&killer_moves[0][0], &killer_moves[0][0] + sizeof(killer_moves) / sizeof(Move), Move::NULL_MOVE);
 
@@ -977,6 +1038,8 @@ int main() {
             board.setFen(chess::constants::STARTPOS);
             tt_clear();
             std::fill(&history_table[0][0][0], &history_table[0][0][0] + sizeof(history_table) / sizeof(int), 0);
+            std::fill(&continuation_history[0][0][0][0], &continuation_history[0][0][0][0] + sizeof(continuation_history) / sizeof(int), 0);
+            std::fill(&capture_history[0][0][0], &capture_history[0][0][0] + sizeof(capture_history) / sizeof(int), 0);
             std::fill(&counter_moves[0][0], &counter_moves[0][0] + sizeof(counter_moves) / sizeof(Move), Move::NULL_MOVE);
         } else if (command == "position") {
             std::string token;
