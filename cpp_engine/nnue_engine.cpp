@@ -592,22 +592,23 @@ static inline int piece_idx(const Board& board, Square sq) {
 }
 
 // ─── Move Scoring for Ordering ────────────────────────────────────────────────
-// Returns encoded score. For captures, also outputs the pre-computed SEE value
-// so callers can reuse it without recomputing.
-int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move prev_move, Move prev_prev_move, int& see_out) {
-    see_out = INT_MIN; // sentinel: not a capture
+// Returns encoded score based on MVV-LVA for captures, killers, and history.
+int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move prev_move, Move prev_prev_move) {
     if (move == tt_move) return 10'000'000;
 
     bool is_capture = board.isCapture(move) || move.typeOf() == Move::ENPASSANT;
     bool is_promo   = move.typeOf() == Move::PROMOTION;
 
     if (is_capture || is_promo) {
-        int see_val = static_exchange_eval(board, move);
-        see_out = see_val;  // cache for reuse in pruning
-        if (see_val >= 0)
-            return 7'000'000 + see_val;
-        else
-            return 1'000 + see_val; // Losing captures below quiet moves
+        int victim_val = 0;
+        if (move.typeOf() == Move::ENPASSANT) victim_val = piece_values[0];
+        else if (board.at(move.to()) != Piece::NONE) victim_val = piece_values[static_cast<int>(board.at(move.to()).type())];
+        
+        int attacker_val = piece_values[static_cast<int>(board.at(move.from()).type())];
+        if (is_promo) victim_val += piece_values[4];
+
+        // MVV-LVA ordering: 7 million + victim * 10 - attacker
+        return 7'000'000 + victim_val * 10 - attacker_val;
     }
 
     // Killer moves
@@ -647,13 +648,12 @@ int score_move(const Board& board, const Move& move, Move tt_move, int ply, Move
 struct ScoredMove {
     Move move;
     int  score;
-    int  see;   // pre-computed SEE for captures; INT_MIN for quiets
 };
 
 void score_moves(const Board& board, const Movelist& moves, ScoredMove* scored, int n, Move tt_move, int ply, Move prev_move, Move prev_prev_move) {
     for (int i = 0; i < n; ++i) {
         scored[i].move  = moves[i];
-        scored[i].score = score_move(board, moves[i], tt_move, ply, prev_move, prev_prev_move, scored[i].see);
+        scored[i].score = score_move(board, moves[i], tt_move, ply, prev_move, prev_prev_move);
     }
 }
 
@@ -693,10 +693,8 @@ int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, 
         partial_sort_next(scored, i, n);
         Move move = scored[i].move;
         
-        // Skip losing captures (SEE < 0) — SEE already computed in scored[i].see
-        int see_val = scored[i].see;
-        if (see_val != INT_MIN && see_val < 0) continue;
-        if (see_val == INT_MIN && !see_ge(board, move, 0)) continue;
+        // Skip losing captures (SEE < 0)
+        if (!see_ge(board, move, 0)) continue;
 
         // Per-move delta pruning
         int capt_val = (move.typeOf() == Move::ENPASSANT) ? piece_values[0] :
@@ -706,15 +704,14 @@ int quiescence(Board& board, int alpha, int beta, const nnue::Accumulator& acc, 
 
         bool is_king_move = (board.at(move.from()).type() == chess::PieceType::KING);
         nnue::Accumulator next_acc;
-        if (!is_king_move) {
-            chess::Piece piece = board.at(move.from());
-            nnue::update_accumulator(board, move, acc, next_acc);
-        }
+        
+        // Always call update_accumulator to handle incremental updates (like captures) for the opponent
+        nnue::update_accumulator(board, move, acc, next_acc);
 
         board.makeMove(move);
         if (is_king_move) {
+            // Only refresh the accumulator of the side that just moved (the opponent now)
             nnue::refresh_accumulator(board, ~board.sideToMove(), next_acc);
-            nnue::refresh_accumulator(board, board.sideToMove(), next_acc);
         }
         int score = -quiescence(board, -beta, -alpha, next_acc, ply + 1);
         board.unmakeMove(move);
@@ -915,10 +912,8 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
                     if (cont_hist[pp][prev_move.to().index()][cp][move.to().index()] < -2000 * depth) continue;
                 }
             } else if (is_capture && !is_promo && move_count > 1 && depth <= 6) {
-                // SEE pruning for losing captures — reuse cached SEE from ordering
-                int see_val = scored[mi].see;
-                if (see_val == INT_MIN) see_val = static_exchange_eval(board, move);
-                if (see_val < -depth * 100) continue;
+                // SEE pruning for losing captures
+                if (!see_ge(board, move, -depth * 100)) continue;
             }
         }
 
@@ -928,14 +923,14 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
         // Update NNUE accumulator (lazy for king moves)
         nnue::Accumulator next_acc;
-        if (!is_king_move) {
-            nnue::update_accumulator(board, move, acc, next_acc);
-        }
+        
+        // Always call update_accumulator to incrementally update opponent's features
+        nnue::update_accumulator(board, move, acc, next_acc);
 
         board.makeMove(move);
         if (is_king_move) {
+            // Only refresh the side that made the king move
             nnue::refresh_accumulator(board, ~board.sideToMove(), next_acc);
-            nnue::refresh_accumulator(board, board.sideToMove(), next_acc);
         }
         bool gives_check = board.inCheck();
 
