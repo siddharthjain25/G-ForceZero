@@ -253,14 +253,20 @@ class StreamingBinDataset(IterableDataset):
                 
         # calculate probability from score or result
         # NNUE MSE usually maps: result 1 = white win, 0 = black, 2 = draw
+        # Blend Game Result with Engine Score for faster convergence
         if result == 1:
-            prob = 1.0
+            w_res = 1.0
         elif result == 0:
-            prob = 0.0
+            w_res = 0.0
         elif result == 2:
-            prob = 0.5
+            w_res = 0.5
         else:
-            prob = 1.0 / (1.0 + np.exp(-0.003 * score))
+            w_res = 1.0 / (1.0 + np.exp(-0.003 * score))
+            
+        score_prob = 1.0 / (1.0 + np.exp(-0.003 * score))
+        
+        # 50% Game Result, 50% Search Evaluation
+        prob = 0.5 * w_res + 0.5 * score_prob
             
         return w_feat, b_feat, float(prob)
 
