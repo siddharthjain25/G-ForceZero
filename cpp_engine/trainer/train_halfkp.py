@@ -23,7 +23,7 @@ import struct
 # Fix PyTorch DataLoader shared memory (/dev/shm) crash
 mp.set_sharing_strategy('file_system')
 
-NUM_FEATURES = 40960  # 64 (king sq) * 10 (piece types) * 64 (piece sq)
+NUM_FEATURES = 41024  # 641 * 64
 HIDDEN_SIZE  = 256
 BATCH_SIZE   = 4096   # Massive batch size since it fits in VRAM easily (4096 * 40960 elements = ~1.3 GB)
 
