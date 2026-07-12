@@ -182,6 +182,121 @@ class StreamingEPDDataset(IterableDataset):
         for item in buffer:
             yield item
 
+# ─── Streaming Binary Dataset ──────────────────────────────────────────────────
+class StreamingBinDataset(IterableDataset):
+    """
+    Reads 72-byte PackedPosition structs directly from the binary dataset.
+    Bypasses all string parsing for maximum performance.
+    """
+    def __init__(self, bin_file, shuffle_buffer=50000):
+        self.bin_file = bin_file
+        self.shuffle_buffer = shuffle_buffer
+        self.struct_fmt = struct.Struct('<8Q4Bh2b')
+        self._len = None
+        self.RECORD_SIZE = 72
+
+    def __len__(self):
+        if self._len is None:
+            print(f"Calculating total positions in {self.bin_file}...", flush=True)
+            self._len = os.path.getsize(self.bin_file) // self.RECORD_SIZE
+        return self._len
+
+    def get_bits(self, val):
+        bits = []
+        while val:
+            lsb = val & -val
+            bits.append(lsb.bit_length() - 1)
+            val &= val - 1
+        return bits
+
+    def parse_record(self, data):
+        fields = self.struct_fmt.unpack(data)
+        white, black, kings, queens, rooks, bishops, knights, pawns = fields[:8]
+        ep, turn, castling, pad1, score, result, pad2 = fields[8:]
+        
+        # Determine king positions
+        wk_sq = -1
+        bk_sq = -1
+        
+        # Calculate king positions first
+        k_w = kings & white
+        k_b = kings & black
+        if k_w: wk_sq = (k_w & -k_w).bit_length() - 1
+        if k_b: bk_sq = (k_b & -k_b).bit_length() - 1
+            
+        if wk_sq == -1 or bk_sq == -1: return None
+        
+        bk_sq_flipped = bk_sq ^ 56
+        
+        w_feat, b_feat = [], []
+        
+        pieces = [
+            (pawns & white, 0, True), (knights & white, 1, True), 
+            (bishops & white, 2, True), (rooks & white, 3, True), (queens & white, 4, True),
+            (pawns & black, 0, False), (knights & black, 1, False), 
+            (bishops & black, 2, False), (rooks & black, 3, False), (queens & black, 4, False)
+        ]
+        
+        for bb, pt, is_white in pieces:
+            while bb:
+                lsb = bb & -bb
+                sq = lsb.bit_length() - 1
+                bb &= bb - 1
+                
+                sq_w = sq
+                pt_w = pt if is_white else pt + 5
+                w_feat.append(pt_w * 4096 + wk_sq * 64 + sq_w)
+                
+                sq_b = sq ^ 56
+                pt_b = pt if not is_white else pt + 5
+                b_feat.append(pt_b * 4096 + bk_sq_flipped * 64 + sq_b)
+                
+        # calculate probability from score or result
+        # NNUE MSE usually maps: result 1 = white win, 0 = black, 2 = draw
+        if result == 1:
+            prob = 1.0
+        elif result == 0:
+            prob = 0.0
+        elif result == 2:
+            prob = 0.5
+        else:
+            prob = 1.0 / (1.0 + np.exp(-0.003 * score))
+            
+        return w_feat, b_feat, float(prob)
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        buffer = []
+
+        with open(self.bin_file, 'rb') as f:
+            idx = 0
+            while True:
+                data = f.read(self.RECORD_SIZE)
+                if not data or len(data) < self.RECORD_SIZE:
+                    break
+                    
+                if worker_info is not None:
+                    if idx % worker_info.num_workers != worker_info.id:
+                        idx += 1
+                        continue
+
+                idx += 1
+                result = self.parse_record(data)
+                if result is None:
+                    continue
+
+                buffer.append(result)
+
+                if len(buffer) >= self.shuffle_buffer:
+                    random.shuffle(buffer)
+                    for item in buffer:
+                        yield item
+                    buffer = []
+
+        random.shuffle(buffer)
+        for item in buffer:
+            yield item
+
 def custom_collate(batch):
     w_batch = torch.zeros(len(batch), NUM_FEATURES, dtype=torch.float32)
     b_batch = torch.zeros(len(batch), NUM_FEATURES, dtype=torch.float32)
@@ -226,7 +341,10 @@ def train(dataset_file, epochs=2, num_workers=0):
     print(f"Epochs:  {epochs}  |  Batch: {BATCH_SIZE}  |  Workers: {num_workers}")
     print(f"Memory:  Streaming (no full preload)\n")
 
-    dataset    = StreamingEPDDataset(dataset_file, shuffle_buffer=20000)
+    if dataset_file.endswith(".bin"):
+        dataset = StreamingBinDataset(dataset_file, shuffle_buffer=20000)
+    else:
+        dataset = StreamingEPDDataset(dataset_file, shuffle_buffer=20000)
     pin = False  # pin_memory doubles RAM usage for large batches — not worth it
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, num_workers=num_workers,
                             pin_memory=pin,
@@ -285,17 +403,23 @@ def train(dataset_file, epochs=2, num_workers=0):
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                torch.save(model.state_dict(), "best_model.pth")
-                export_quantized_weights(model, "nnue_weights.bin")
-                print(f"✅ New best! Saved nnue_weights.bin (loss={best_loss:.4f})\n")
+                torch.save(model.state_dict(), "best_model_temp.pth")
+                os.replace("best_model_temp.pth", "best_model.pth")
+                
+                # Output a uniquely named NNUE file so we NEVER overwrite the baseline
+                export_name = f"trained_network_ep{epoch+1}.nnue"
+                export_quantized_weights(model, "temp_network.nnue")
+                os.replace("temp_network.nnue", export_name)
+                print(f"✅ New best! Saved {export_name} (loss={best_loss:.4f})\n")
 
         print(f"\nTraining complete. Best loss: {best_loss:.4f}")
         
     except KeyboardInterrupt:
         print("\n\n⚠️ Training interrupted by user!")
         print("Saving current progress before exiting...")
-        export_quantized_weights(model, "nnue_weights.bin")
-        print("✅ Weights saved successfully. You can now use nnue_weights.bin in your engine!")
+        export_quantized_weights(model, "temp_network.nnue")
+        os.replace("temp_network.nnue", "trained_network_interrupted.nnue")
+        print("✅ Weights saved safely. You can now use this .nnue in your engine!")
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -38,7 +38,11 @@ challenge:
 
 matchmaking:
   allow_matchmaking: true
+  challenge_timeout: 30
+  challenge_variant: standard
+  challenge_mode: rated
   challenge_initial_time:
+    - 60
     - 180
     - 300
     - 600

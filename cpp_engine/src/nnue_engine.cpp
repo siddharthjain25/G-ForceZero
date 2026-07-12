@@ -45,6 +45,7 @@ extern "C" {
 }
 
 using namespace chess;
+#include "selfplay.hpp"
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const int INF        = 30000;
@@ -55,6 +56,8 @@ const int MOVE_OVERHEAD = 20; // ms overhead per move
 // ─── Piece values ─────────────────────────────────────────────────────────────
 // P=100, N=320, B=330, R=500, Q=900, K=20000
 const int piece_values[6] = {100, 320, 330, 500, 900, 20000};
+uint64_t nodes_searched = 0;
+int last_search_score = 0;
 
 // ─── Transposition Table ─────────────────────────────────────────────────────
 struct TTEntry {
@@ -1168,6 +1171,7 @@ void search_worker(Board board, int target_ms) {
         }
         if (!abort_search) {
             previous_score = score;
+            last_search_score = score;
         }
     }
 }
@@ -1597,6 +1601,12 @@ int main() {
             }
         } else if (command == "isready") {
             std::cout << "readyok\n";
+        } else if (command == "selfplay") {
+            int num_games = 1;
+            int depth = 5;
+            std::string output_file = "dataset.bin";
+            ss >> num_games >> depth >> output_file;
+            generate_selfplay(num_games, depth, output_file);
         } else if (command == "ucinewgame") {
             board.setFen(chess::constants::STARTPOS);
             tt_clear();
