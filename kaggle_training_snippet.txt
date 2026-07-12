@@ -1,0 +1,18 @@
+# 1. Clone the repository
+!git clone https://github.com/victorvondoom25/G-ForceZero.git
+
+# 2. Enter the engine directory
+%cd G-ForceZero/cpp_engine
+
+# 3. Compile the C++ engine (Kaggle uses Ubuntu, so this works perfectly)
+!cmake -B build -DCMAKE_BUILD_TYPE=Release
+!cmake --build build -j4
+
+# 4. Make sure the script is executable
+!chmod +x autopilot.py
+
+# 5. Run the Autopilot! (It will now stop automatically before Kaggle kills it)
+!python3 autopilot.py
+
+# 6. Copy the trained brain to the main output directory so you can download it easily!
+!cp brain.nnue /kaggle/working/brain.nnue
