@@ -421,10 +421,10 @@ def train(dataset_file, epochs=2, num_workers=0):
                 os.replace("best_model_temp.pth", "best_model.pth")
                 
                 # Output a uniquely named NNUE file so we NEVER overwrite the baseline
-                export_name = f"trained_network_ep{epoch+1}.nnue"
+                export_name = "brain.nnue"
                 export_quantized_weights(model, "temp_network.nnue")
                 os.replace("temp_network.nnue", export_name)
-                print(f"✅ New best! Saved {export_name} (loss={best_loss:.4f})\n")
+                print(f"✅ New best! Saved {export_name} (loss={avg_loss:.4f})")
 
         print(f"\nTraining complete. Best loss: {best_loss:.4f}")
         

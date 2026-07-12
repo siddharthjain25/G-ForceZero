@@ -1510,11 +1510,11 @@ int main() {
     bool loaded = false;
     for (const auto& path : {
             std::string("raw.bin"),
-            std::string("nn-af1339a6dea3.nnue"),
+            std::string("brain.nnue"),
             std::string("cpp_engine/raw.bin"),
-            std::string("cpp_engine/nn-af1339a6dea3.nnue"),
+            std::string("cpp_engine/brain.nnue"),
             std::string("/app/G-ForceZero/cpp_engine/raw.bin"),
-            std::string("/app/G-ForceZero/cpp_engine/nn-af1339a6dea3.nnue"),
+            std::string("/app/G-ForceZero/cpp_engine/brain.nnue"),
         }) {
         try {
             nnue::load_weights(path);
@@ -1552,7 +1552,7 @@ int main() {
                       << "option name LMR_Mult type spin default 225 min 50 max 500\n"
                       << "option name FP_Margin_Base type spin default 100 min 10 max 300\n"
                       << "option name FP_Margin_Mult type spin default 60 min 10 max 200\n"
-                      << "option name EvalFile type string default nn-af1339a6dea3.nnue\n"
+                      << "option name EvalFile type string default brain.nnue\n"
                       << "option name SyzygyPath type string default <empty>\n"
                       << "uciok\n";
         } else if (command == "setoption") {
