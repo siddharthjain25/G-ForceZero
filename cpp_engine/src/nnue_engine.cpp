@@ -70,10 +70,30 @@ struct TTEntry {
 };
 static_assert(sizeof(TTEntry) == 8, "TTEntry must be 8 bytes");
 
-// 16M entries = 128 MB
 const int TT_SIZE = 1 << 24;
 const int TT_MASK = TT_SIZE - 1;
-std::atomic<uint64_t>* TT = new std::atomic<uint64_t>[TT_SIZE];
+std::atomic<uint64_t>* TT = nullptr;
+
+#if defined(__linux__)
+#include <sys/mman.h>
+#ifndef MAP_HUGETLB
+#define MAP_HUGETLB 0x40000
+#endif
+#endif
+
+void init_tt() {
+    if (TT) return;
+    size_t size = TT_SIZE * sizeof(std::atomic<uint64_t>);
+#if defined(__linux__)
+    void* mem = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+    if (mem == MAP_FAILED) {
+        mem = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
+    TT = static_cast<std::atomic<uint64_t>*>(mem);
+#else
+    TT = new std::atomic<uint64_t>[TT_SIZE];
+#endif
+}
 
 void tt_clear() {
     std::memset(TT, 0, TT_SIZE * sizeof(std::atomic<uint64_t>));
@@ -1499,6 +1519,8 @@ Move search_best_move(Board& board, int soft_limit, int hard_limit) {
 
 // ─── UCI Loop ─────────────────────────────────────────────────────────────────
 int main() {
+    init_tt();
+    tt_clear();
     // Initialize LMR table
     init_lmr_table();
     
