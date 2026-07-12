@@ -1,4 +1,5 @@
-# 1. Clone the repository
+# 1. Install dependencies and clone the repository
+!pip install chess
 !git clone https://github.com/victorvondoom25/G-ForceZero.git
 
 # 2. Enter the engine directory
