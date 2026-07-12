@@ -10,6 +10,9 @@ print("==============================================")
 print("   G-ForceZero Automated Training Pipeline    ")
 print("==============================================\n")
 
+MAX_ITERATIONS = 50 # Prevents Kaggle from hard-crashing at 12 hours
+start_time = time.time()
+
 # To start fresh like AlphaZero, delete best_model.pth if you want to start from scratch
 if os.path.exists("best_model.pth"):
     print("[INFO] Resuming from existing best_model.pth...")
@@ -18,7 +21,11 @@ else:
     print("[INFO] Starting from scratch (Iteration 1). Bootstrapping required!")
     iteration = 1
 
-while True:
+while iteration <= MAX_ITERATIONS:
+    # Stop early if we are approaching Kaggle's 12-hour limit (11.5 hours = 41400 seconds)
+    if time.time() - start_time > 41400:
+        print("\n[INFO] Approaching 12-hour limit! Exiting gracefully to save Kaggle outputs.")
+        break
     print(f"\n--- [ ITERATION {iteration} ] ---")
     
     # Bootstrap: If it's the very first iteration, we don't have a smart NNUE yet.
