@@ -312,26 +312,40 @@ class HalfKPNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.fc1 = nn.Linear(NUM_FEATURES, HIDDEN_SIZE)
-        self.fc2 = nn.Linear(HIDDEN_SIZE * 2, 1)
+        self.fc2 = nn.Linear(HIDDEN_SIZE * 2, 32)
+        self.fc3 = nn.Linear(32, 32)
+        self.fc4 = nn.Linear(32, 1)
 
     def forward(self, w_features, b_features):
         w_acc = torch.clamp(self.fc1(w_features), 0.0, 1.0)
         b_acc = torch.clamp(self.fc1(b_features), 0.0, 1.0)
         acc   = torch.cat([w_acc, b_acc], dim=1)
-        return torch.sigmoid(self.fc2(acc))
+        
+        # 4-layer Stockfish architecture
+        x = torch.clamp(self.fc2(acc), 0.0, 1.0)
+        x = torch.clamp(self.fc3(x), 0.0, 1.0)
+        return torch.sigmoid(self.fc4(x))
 
 # ─── Weight Export ────────────────────────────────────────────────────────────
 def export_quantized_weights(model, filename):
     fc1_w = (model.fc1.weight.detach().cpu().numpy() * 256).astype('int16')
     fc1_b = (model.fc1.bias.detach().cpu().numpy()   * 256).astype('int16')
-    fc2_w = (model.fc2.weight.detach().cpu().numpy()  * 64).astype('int16')
-    fc2_b = (model.fc2.bias.detach().cpu().numpy()    * 64 * 256).astype('int32')
+    fc2_w = (model.fc2.weight.detach().cpu().numpy() * 64).astype('int8')
+    fc2_b = (model.fc2.bias.detach().cpu().numpy()   * 64 * 256).astype('int32')
+    fc3_w = (model.fc3.weight.detach().cpu().numpy() * 64).astype('int8')
+    fc3_b = (model.fc3.bias.detach().cpu().numpy()   * 64 * 256).astype('int32')
+    fc4_w = (model.fc4.weight.detach().cpu().numpy() * 64).astype('int8')
+    fc4_b = (model.fc4.bias.detach().cpu().numpy()   * 64 * 256).astype('int32')
     with open(filename, 'wb') as f:
         f.write(fc1_w.tobytes())
         f.write(fc1_b.tobytes())
         f.write(fc2_w.tobytes())
         f.write(fc2_b.tobytes())
-    print(f"Quantized NNUE weights exported to {filename}")
+        f.write(fc3_w.tobytes())
+        f.write(fc3_b.tobytes())
+        f.write(fc4_w.tobytes())
+        f.write(fc4_b.tobytes())
+    print(f"Quantized 4-Layer NNUE weights exported to {filename}")
 
 # ─── Training ─────────────────────────────────────────────────────────────────
 def train(dataset_file, epochs=2, num_workers=0):
