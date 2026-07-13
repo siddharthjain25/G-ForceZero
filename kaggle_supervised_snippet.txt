@@ -18,9 +18,10 @@ else:
 !cmake .
 !make pgn_to_epd
 
-# 5. Convert the massive PGN into EPD instantly using C++
-# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded file!)
-!./pgn_to_epd /kaggle/input/YOUR_DATASET_NAME/games.pgn /kaggle/working/training_data.epd
+# 5. Convert massive PGNs into EPD instantly using C++
+# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded files!)
+# Usage: ./pgn_to_epd <output.epd> <input1.pgn> <input2.pgn> ...
+!./pgn_to_epd /kaggle/working/training_data.epd /kaggle/input/YOUR_DATASET_NAME/games.pgn
 
 # 6. Train the Neural Network instantly on the new data!
 !python3 trainer/train_halfkp.py /kaggle/working/training_data.epd

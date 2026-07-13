@@ -79,27 +79,34 @@ private:
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <input.pgn> <output.epd>\n";
+        std::cerr << "Usage: " << argv[0] << " <output.epd> <input1.pgn> [input2.pgn...]\n";
         return 1;
     }
 
-    std::ifstream in(argv[1]);
-    std::ofstream out(argv[2]);
-
-    if (!in.is_open() || !out.is_open()) {
-        std::cerr << "Error opening files.\n";
+    std::ofstream out(argv[1]);
+    if (!out.is_open()) {
+        std::cerr << "Error opening output file: " << argv[1] << "\n";
         return 1;
     }
 
-    PgnVisitor visitor(out, 1000000); // 1 Million Game Limit
-    pgn::StreamParser parser(in);
+    PgnVisitor visitor(out, 1000000); // 1 Million Game Limit overall
 
     std::cout << "Starting high-speed C++ PGN conversion...\n";
+
     try {
-        parser.readGames(visitor);
+        for (int i = 2; i < argc; ++i) {
+            std::ifstream in(argv[i]);
+            if (!in.is_open()) {
+                std::cerr << "Error opening input file: " << argv[i] << " (Skipping)\n";
+                continue;
+            }
+            std::cout << "Parsing " << argv[i] << "...\n";
+            pgn::StreamParser parser(in);
+            parser.readGames(visitor);
+        }
     } catch (const std::runtime_error& e) {
         if (std::string(e.what()) == "MAX_GAMES_REACHED") {
-            std::cout << "\n[INFO] Reached 1,000,000 games. Stopped safely.\n";
+            std::cout << "\n[INFO] Reached 1,000,000 elite games limit! Stopped safely.\n";
         } else {
             std::cerr << "\nError: " << e.what() << "\n";
         }
