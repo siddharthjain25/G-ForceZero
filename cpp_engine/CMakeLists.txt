@@ -15,3 +15,6 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=auto")
 
 add_executable(nnue_engine src/nnue_engine.cpp src/nnue.cpp src/tbprobe.cpp)
 target_link_libraries(nnue_engine pthread)
+
+add_executable(pgn_to_epd src/pgn_to_epd.cpp)
+target_link_libraries(pgn_to_epd pthread)

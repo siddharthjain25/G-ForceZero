@@ -13,12 +13,14 @@ else:
 # 3. Enter the repository root where the converter script is
 %cd G-ForceZero
 
-# 4. Convert the massive PGN into EPD 
-# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded file!)
-!python3 pgn_to_epd.py /kaggle/input/YOUR_DATASET_NAME/games.pgn /kaggle/working/training_data.epd
-
-# 5. Move into the engine directory for PyTorch training
+# 4. Compile the ultra-fast C++ PGN parser
 %cd cpp_engine
+!cmake .
+!make pgn_to_epd
+
+# 5. Convert the massive PGN into EPD instantly using C++
+# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded file!)
+!./pgn_to_epd /kaggle/input/YOUR_DATASET_NAME/games.pgn /kaggle/working/training_data.epd
 
 # 6. Train the Neural Network instantly on the new data!
 !python3 trainer/train_halfkp.py /kaggle/working/training_data.epd
