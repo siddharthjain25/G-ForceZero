@@ -1,0 +1,27 @@
+# 1. Install dependencies
+!pip install chess
+
+# 2. Clone the repository (or pull latest if it exists)
+import os
+if not os.path.exists("G-ForceZero"):
+    !git clone https://github.com/victorvondoom25/G-ForceZero.git
+else:
+    %cd G-ForceZero
+    !git pull
+    %cd ..
+
+# 3. Enter the repository root where the converter script is
+%cd G-ForceZero
+
+# 4. Convert the massive PGN into EPD 
+# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded file!)
+!python3 pgn_to_epd.py /kaggle/input/YOUR_DATASET_NAME/games.pgn /kaggle/working/training_data.epd
+
+# 5. Move into the engine directory for PyTorch training
+%cd cpp_engine
+
+# 6. Train the Neural Network instantly on the new data!
+!python3 trainer/train_halfkp.py /kaggle/working/training_data.epd
+
+# 7. Copy the trained brain to the main output directory so you can download it easily!
+!cp brain.nnue /kaggle/working/brain.nnue
