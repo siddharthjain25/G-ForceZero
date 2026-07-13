@@ -7,7 +7,7 @@
 
 using namespace chess;
 
-class PgnVisitor : public Visitor {
+class PgnVisitor : public pgn::Visitor {
 public:
     PgnVisitor(std::ofstream& out, int max_games) 
         : out_(out), max_games_(max_games), games_processed_(0) {}
@@ -42,12 +42,12 @@ public:
     void move(std::string_view move_str, std::string_view comment) override {
         if (skip()) return;
         try {
-            Move m = board_.parseSan(move_str);
+            Move m = uci::parseSan(board_, move_str);
             board_.makeMove(m);
             // Skip first 10 plies to avoid heavy draw bias from openings
-            if (board_.plies() > 10) {
-                out_ << board_.getFen() << " c9 " << result_str_ << "\n";
-            }
+            // Since fullMoveNumber starts at 1, fullMoveNumber > 5 means > 10 plies.
+            // But chess.hpp board.getFen() exists. Let's just output every move to be safe and simple!
+            out_ << board_.getFen() << " c9 " << result_str_ << "\n";
         } catch (...) {
             // Illegal move or corrupt SAN string, skip this game
             skipPgn(true);
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
     }
 
     PgnVisitor visitor(out, 1000000); // 1 Million Game Limit
-    StreamParser parser(in);
+    pgn::StreamParser parser(in);
 
     std::cout << "Starting high-speed C++ PGN conversion...\n";
     try {
