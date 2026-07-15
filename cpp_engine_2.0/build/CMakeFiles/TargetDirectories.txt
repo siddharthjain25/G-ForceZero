@@ -1,0 +1,7 @@
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/CMakeFiles/nnue_engine.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/CMakeFiles/pgn_to_epd.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/CMakeFiles/edit_cache.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/CMakeFiles/rebuild_cache.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/src/sf_bridge/CMakeFiles/sf_bridge.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/src/sf_bridge/CMakeFiles/edit_cache.dir
+/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/build/src/sf_bridge/CMakeFiles/rebuild_cache.dir

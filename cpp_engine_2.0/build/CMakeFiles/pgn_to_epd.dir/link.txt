@@ -1,0 +1,1 @@
+/usr/bin/c++  -O3 -march=native -mtune=native -O3 -DNDEBUG  -flto=auto -Wl,--dependency-file=CMakeFiles/pgn_to_epd.dir/link.d CMakeFiles/pgn_to_epd.dir/src/pgn_to_epd.cpp.o -o /home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/pgn_to_epd  -lpthread

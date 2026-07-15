@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/CMakeFiles/stockfish-populate"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/CMakeFiles/stockfish-populate.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/CMakeFiles/stockfish-populate-complete.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-build.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-configure.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-download.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-install.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-patch.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-test.rule"
+		},
+		{
+			"file" : "/home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/_deps/stockfish-subbuild/stockfish-populate-prefix/src/stockfish-populate-stamp/stockfish-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"stockfish-populate"
+		],
+		"name" : "stockfish-populate"
+	}
+}
