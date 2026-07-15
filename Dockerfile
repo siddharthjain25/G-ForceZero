@@ -22,7 +22,7 @@ COPY . /app/G-ForceZero
 
 # Compile the C++ Engine (using high performance flags)
 WORKDIR /app/G-ForceZero/cpp_engine_2.0
-RUN mkdir build && cd build && cmake .. && make -j4
+RUN mkdir -p build && cd build && rm -rf * && cmake .. && make -j4
 # Clone the official Lichess Bot
 WORKDIR /app
 RUN git clone https://github.com/lichess-bot/lichess-bot.git

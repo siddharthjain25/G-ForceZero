@@ -1,1 +1,0 @@
-/usr/bin/c++  -O3 -march=native -mtune=native -O3 -DNDEBUG  -flto=auto -Wl,--dependency-file=CMakeFiles/nnue_engine.dir/link.d CMakeFiles/nnue_engine.dir/src/nnue_engine.cpp.o CMakeFiles/nnue_engine.dir/src/nnue.cpp.o CMakeFiles/nnue_engine.dir/src/tbprobe.cpp.o -o /home/sid/Documents/GitHub/G-ForceZero/cpp_engine_2.0/nnue_engine  src/sf_bridge/libsf_bridge.a -lpthread

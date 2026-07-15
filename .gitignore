@@ -24,6 +24,7 @@ cpp_engine_2.0/src/sf_bridge/CMakeFiles/
 cpp_engine_2.0/src/sf_bridge/CMakeCache.txt
 cpp_engine_2.0/src/sf_bridge/Makefile
 cpp_engine_2.0/src/sf_bridge/cmake_install.cmake
+cpp_engine_2.0/build/
 
 # Massive Training Datasets (Do NOT push to GitHub)
 *.epd
