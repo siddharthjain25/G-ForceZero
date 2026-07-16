@@ -12,8 +12,6 @@ engine:
 abort_time: 20
 fake_think_time: false
 
-
-
 challenge:
   concurrency: 1
   sort_by: "best"
