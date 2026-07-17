@@ -3,7 +3,7 @@ url: "https://lichess.org/"
 
 engine:
   dir: "/app/G-ForceZero/cpp_engine_2.0/"
-  name: "nnue_engine"
+  name: "gforce_engine"
   protocol: "uci"
   uci_options:
     Threads: 1
