@@ -38,7 +38,6 @@
 #include <cassert>
 #include <climits>
 #include "chess.hpp"
-#include "nnue.hpp"
 #include "polyglot.hpp"
 extern "C" {
 #include "tbprobe.h"
@@ -648,16 +647,9 @@ int classical_evaluate(const Board& board) {
     return (board.sideToMove() == Color::WHITE) ? score : -score;
 }
 
-// ─── Blended Evaluation (NNUE + Classical) ────────────────────────────────────
-int evaluate(const Board& board, nnue::Accumulator& acc) {
-    if (nodes.load(std::memory_order_relaxed) % 1000000 == 0) {
-        // Just to sample, don't flood stdout
-        // std::cout << "DEBUG EVAL: " << nnue::evaluate(acc, board.sideToMove()) << std::endl;
-    }
-    
-    int nnue_score = nnue::evaluate(acc, board.sideToMove());
-    // Convert NNUE internal units to centipawns (GForce 12 scale: 1 pawn = 208)
-    return (nnue_score * 100) / 208;
+// ─── Custom Evaluation ────────────────────────────────────
+int evaluate(const Board& board) {
+    return classical_evaluate(board);
 }
 
 // ─── Piece index for continuation history ────────────────────────────────────
@@ -744,13 +736,13 @@ void partial_sort_next(ScoredMove* scored, int start, int n) {
 }
 
 // ─── Quiescence Search ────────────────────────────────────────────────────────
-int quiescence(Board& board, int alpha, int beta, nnue::Accumulator& acc, int ply = 0) {
+int quiescence(Board& board, int alpha, int beta, int ply = 0) {
     // Use the centrally-managed abort flag set by negamax's time check
     if (abort_search) return 0;
 
     nodes.fetch_add(1, std::memory_order_relaxed);
 
-    int stand_pat = evaluate(board, acc);
+    int stand_pat = evaluate(board);
     if (stand_pat >= beta) return beta;
 
     // Delta pruning (skip if we can't possibly improve alpha even with best capture)
@@ -791,15 +783,13 @@ int quiescence(Board& board, int alpha, int beta, nnue::Accumulator& acc, int pl
         
         
         // Always call update_accumulator to handle incremental updates (like captures) for the opponent
-        nnue::update_accumulator(board, move, acc);
 
         board.makeMove(move);
         if (is_king_move) {
             // Only refresh the accumulator of the side that just moved (the opponent now)
-            // nnue::refresh_accumulator(board, ~board.sideToMove(), acc);
+            // nnue::refresh_accumulator(board, ~board.sideToMove());
         }
-        int score = -quiescence(board, -beta, -alpha, acc, ply + 1);
-        nnue::undo_accumulator(board, move, acc);
+        int score = -quiescence(board, -beta, -alpha, ply + 1);
         board.unmakeMove(move);
 
         if (score >= beta) return beta;
@@ -809,7 +799,7 @@ int quiescence(Board& board, int alpha, int beta, nnue::Accumulator& acc, int pl
 }
 
 // ─── Negamax ─────────────────────────────────────────────────────────────────
-int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, nnue::Accumulator& acc, Move prev_move = Move::NULL_MOVE, Move prev_prev_move = Move::NULL_MOVE, Move excluded_move = Move::NULL_MOVE) {
+int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_null, Move prev_move = Move::NULL_MOVE, Move prev_prev_move = Move::NULL_MOVE, Move excluded_move = Move::NULL_MOVE) {
     if ((nodes.load(std::memory_order_relaxed) & 4095) == 0) {
         auto chk_now = std::chrono::high_resolution_clock::now();
         if (chk_now > end_time) {
@@ -827,7 +817,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     if (ply < MAX_PLY) pv_length[ply] = 0;
 
     // Guard against excessive ply depth
-    if (ply >= MAX_PLY - 1) return evaluate(board, acc);
+    if (ply >= MAX_PLY - 1) return evaluate(board);
 
     if (!is_root && (board.isHalfMoveDraw() || board.isRepetition(1))) return 0;
 
@@ -890,7 +880,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
     // Standard practice: limit check extensions to not exceed 2x the root depth
     if (in_check && depth > 0 && ply < MAX_PLY * 2 / 3) depth++;
 
-    if (depth <= 0) return quiescence(board, alpha, beta, acc);
+    if (depth <= 0) return quiescence(board, alpha, beta);
 
     // Compute static eval for pruning (avoid if in check)
     int static_eval = 0;
@@ -899,7 +889,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         if (tt_flag != TTEntry::NONE) {
             static_eval = tt_eval;
         } else {
-            static_eval = evaluate(board, acc);
+            static_eval = evaluate(board);
         }
         eval_history[ply] = static_eval;
     } else {
@@ -933,11 +923,9 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
                                   board.pieces(PieceType::QUEEN);
         if (non_pawn_kings && static_eval >= beta) {
             int R = opt_nmp_base + depth / opt_nmp_depth_div + std::min(3, (static_eval - beta) / opt_nmp_eval_div);
-            nnue::make_null_move_accumulator(acc);
             board.makeNullMove();
-            int null_score = -negamax(board, depth - 1 - R, -beta, -beta + 1, ply + 1, false, acc, Move::NULL_MOVE, prev_move);
+            int null_score = -negamax(board, depth - 1 - R, -beta, -beta + 1, ply + 1, false, Move::NULL_MOVE, prev_move);
             board.unmakeNullMove();
-            nnue::undo_null_move_accumulator(acc);
             if (abort_search) return 0;
             if (null_score >= beta) {
                 // Don't return unverified mates
@@ -949,7 +937,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
     // Internal Iterative Deepening: if no TT move and deep node, search shallower first
     if (is_pv && tt_move == Move::NULL_MOVE && depth >= 5) {
-        negamax(board, depth - 4, alpha, beta, ply, false, acc, prev_move, prev_prev_move);
+        negamax(board, depth - 4, alpha, beta, ply, false, prev_move, prev_prev_move);
         tt_move = probe_tt_move(hash);
     }
     
@@ -962,7 +950,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         std::abs(tt_eval) < MATE_SCORE - 1000) 
     {
         int singular_beta = tt_eval - depth;
-        int singular_score = negamax(board, depth / 2, singular_beta - 1, singular_beta, ply, false, acc, prev_move, prev_prev_move, tt_move);
+        int singular_score = negamax(board, depth / 2, singular_beta - 1, singular_beta, ply, false, prev_move, prev_prev_move, tt_move);
         if (singular_score < singular_beta) {
             tt_is_singular = true;
         }
@@ -1040,12 +1028,11 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         
         
         // Always call update_accumulator to incrementally update opponent's features
-        nnue::update_accumulator(board, move, acc);
 
         board.makeMove(move);
         if (is_king_move) {
             // Only refresh the side that made the king move
-            // nnue::refresh_accumulator(board, ~board.sideToMove(), acc);
+            // nnue::refresh_accumulator(board, ~board.sideToMove());
         }
         bool gives_check = board.inCheck();
 
@@ -1058,7 +1045,6 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         // Post-makeMove futility pruning for checks discovered during search
         if (!is_root && !in_check && !gives_check && !is_capture && !is_promo
             && depth <= 8 && move_count > 1 && static_eval + fp_margin <= alpha) {
-            nnue::undo_accumulator(board, move, acc);
         board.unmakeMove(move);
             continue;
         }
@@ -1069,7 +1055,7 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         int score;
         if (move_count == 1) {
             // PV node: full window
-            score = -negamax(board, max_child_depth, -beta, -alpha, ply + 1, true, acc, move, prev_move);
+            score = -negamax(board, max_child_depth, -beta, -alpha, ply + 1, true, move, prev_move);
         } else {
             // LMR: reduce late quiet moves
             bool do_lmr = move_count > 3 && depth >= 3 && !is_capture && !is_promo
@@ -1094,19 +1080,17 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
             // Null-window search (cap depth)
             int lmr_depth = std::max(0, std::min(depth - 1 - R + extension, MAX_PLY - ply - 1));
-            score = -negamax(board, lmr_depth, -alpha - 1, -alpha, ply + 1, true, acc, move, prev_move);
+            score = -negamax(board, lmr_depth, -alpha - 1, -alpha, ply + 1, true, move, prev_move);
 
             // Full-depth re-search if LMR raised alpha or window failed
             if (score > alpha && R > 0) {
-                score = -negamax(board, max_child_depth, -alpha - 1, -alpha, ply + 1, true, acc, move, prev_move);
+                score = -negamax(board, max_child_depth, -alpha - 1, -alpha, ply + 1, true, move, prev_move);
             }
             // Full-window re-search for PV update
             if (score > alpha && score < beta) {
-                score = -negamax(board, depth - 1 + extension, -beta, -alpha, ply + 1, true, acc, move, prev_move);
+                score = -negamax(board, depth - 1 + extension, -beta, -alpha, ply + 1, true, move, prev_move);
             }
         }
-
-        nnue::undo_accumulator(board, move, acc);
         board.unmakeMove(move);
         if (abort_search) return 0;
 
@@ -1174,8 +1158,6 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
 
 // ─── Search Worker (Helper Threads) ───────────────────────────────────────────
 void search_worker(Board board, int target_ms) {
-    nnue::Accumulator root_acc;
-    nnue::init_accumulator(board, root_acc);
 
     int previous_score = 0;
     for (int depth = 1; depth <= 64; ++depth) {
@@ -1194,7 +1176,7 @@ void search_worker(Board board, int target_ms) {
         int fail_high_cnt = 0;
         
         while (true) {
-            score = negamax(board, depth, alpha, beta, 0, true, root_acc, Move::NULL_MOVE);
+            score = negamax(board, depth, alpha, beta, 0, true, Move::NULL_MOVE);
             if (abort_search) break;
             
             if (score <= alpha) {
@@ -1309,9 +1291,6 @@ Move search_best_move(Board& board, int soft_limit, int hard_limit) {
 
     auto start = std::chrono::high_resolution_clock::now();
     end_time   = start + std::chrono::milliseconds(std::max(1, hard_limit));
-
-    nnue::Accumulator root_acc;
-    nnue::init_accumulator(board, root_acc);
 
     int previous_score = 0;
     int best_move_stable_count = 0;
@@ -1431,7 +1410,7 @@ Move search_best_move(Board& board, int soft_limit, int hard_limit) {
         int score;
 
         while (true) {
-            score = negamax(board, depth, alpha, beta, 0, true, root_acc, Move::NULL_MOVE);
+            score = negamax(board, depth, alpha, beta, 0, true, Move::NULL_MOVE);
             if (abort_search) break;
 
             if (score <= alpha) {
@@ -1542,29 +1521,8 @@ int main() {
     // Initialize LMR table
     init_lmr_table();
     
-    // Try loading in order: raw.bin (local), .nnue (direct GForce format), Docker paths
-    auto try_load = [](const std::string& path) {
-        std::ifstream f(path, std::ios::binary);
-        return f.good();
-    };
-    bool loaded = false;
-    for (const auto& path : {
-            std::string("brain.nnue"),
-            std::string("nn-0ee0657fb25e.nnue"),
-            std::string("/app/G-ForceZero/cpp_engine_2.0/brain.nnue")
-        }) {
-        if (!try_load(path)) continue;
-        try {
-            nnue::load_weights(path);
-            loaded = true;
-            break;
-        } catch (...) {}
-    }
-    if (!loaded) {
-        std::cerr << "Fatal error: could not load NNUE weights from any known path!\n";
-        return 1;
-    }
-    std::cout << "G-ForceZero NNUE Engine ready.\n";
+    // Custom evaluation does not require weight loading
+    std::cout << "G-ForceZero Engine ready.\n";
     std::cout.flush();
 
     chess::Board board;
@@ -1578,11 +1536,10 @@ int main() {
         ss >> command;
 
         if (command == "uci") {
-            std::cout << "id name G-ForceZero NNUE\n"
+            std::cout << "id name G-ForceZero\n"
                       << "id author Siddharth\n"
                       << "option name Hash type spin default 128 min 1 max 1024\n"
                       << "option name Threads type spin default 1 min 1 max 64\n"
-                      << "option name NNUE_Weight type spin default 60 min 0 max 100\n"
                       << "option name RFP_Margin type spin default 80 min 10 max 200\n"
                       << "option name NMP_Base type spin default 3 min 1 max 10\n"
                       << "option name NMP_Depth_Div type spin default 6 min 1 max 15\n"
@@ -1590,7 +1547,6 @@ int main() {
                       << "option name LMR_Mult type spin default 225 min 50 max 500\n"
                       << "option name FP_Margin_Base type spin default 100 min 10 max 300\n"
                       << "option name FP_Margin_Mult type spin default 60 min 10 max 200\n"
-                      << "option name EvalFile type string default brain.nnue\n"
                       << "option name SyzygyPath type string default <empty>\n"
                       << "option name Hash type spin default 16 min 1 max 1048576\n"
                       << "uciok\n";
@@ -1618,13 +1574,6 @@ int main() {
                 opt_fp_margin_base = std::stoi(val_val);
             } else if (name_val == "FP_Margin_Mult") {
                 opt_fp_margin_mult = std::stoi(val_val);
-            } else if (name_val == "EvalFile") {
-                try {
-                    nnue::load_weights(val_val);
-                    std::cout << "info string Loaded NNUE from " << val_val << "\n";
-                } catch (const std::exception& e) {
-                    std::cout << "info string Failed to load NNUE: " << e.what() << "\n";
-                }
             } else if (name_val == "SyzygyPath") {
                 // val_val may only be the first token; rebuild full value from rest of line
                 std::string full_path = val_val;
@@ -1651,11 +1600,8 @@ int main() {
             std::fill(&counter_moves[0][0], &counter_moves[0][0] + sizeof(counter_moves) / sizeof(Move), Move::NULL_MOVE);
             std::memset(cont_hist, 0, sizeof(cont_hist));
         } else if (command == "eval") {
-            nnue::Accumulator acc;
-            nnue::init_accumulator(board, acc);
-            int nnue_score = nnue::evaluate(acc, board.sideToMove());
-            nnue_score = (nnue_score * 100) / 208;
-            std::cout << "NNUE eval: " << nnue_score << "\n";
+            int score = classical_evaluate(board);
+            std::cout << "Evaluation: " << score << "\n";
         } else if (command == "position") {
             std::string token;
             ss >> token;

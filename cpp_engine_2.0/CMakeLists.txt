@@ -12,9 +12,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -msse4.1 -mpopcnt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto=auto")
 
-add_subdirectory(src/sf_bridge)
-add_executable(gforce_engine src/gforce_engine.cpp src/nnue.cpp src/tbprobe.cpp)
-target_link_libraries(gforce_engine sf_bridge pthread)
+add_executable(gforce_engine src/gforce_engine.cpp src/tbprobe.cpp)
+target_link_libraries(gforce_engine pthread)
 
 add_executable(pgn_to_epd src/pgn_to_epd.cpp)
 target_link_libraries(pgn_to_epd pthread)
