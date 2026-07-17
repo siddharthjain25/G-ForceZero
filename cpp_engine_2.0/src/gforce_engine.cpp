@@ -42,6 +42,10 @@
 extern "C" {
 #include "tbprobe.h"
 }
+#include "custom_nnue.hpp"
+
+custom_nnue::Accumulator global_nnue_acc;
+bool nnue_loaded = false;
 
 using namespace chess;
 
@@ -649,6 +653,9 @@ int classical_evaluate(const Board& board) {
 
 // ─── Custom Evaluation ────────────────────────────────────
 int evaluate(const Board& board) {
+    if (nnue_loaded) {
+        return custom_nnue::evaluate(global_nnue_acc, board, board.sideToMove());
+    }
     return classical_evaluate(board);
 }
 
@@ -1522,6 +1529,9 @@ int main() {
     init_lmr_table();
     
     // Custom evaluation does not require weight loading
+    if (!nnue_loaded) {
+        nnue_loaded = custom_nnue::load_network("brain.nnue");
+    }
     std::cout << "G-ForceZero Engine ready.\n";
     std::cout.flush();
 
