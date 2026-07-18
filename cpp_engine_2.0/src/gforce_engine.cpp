@@ -804,6 +804,10 @@ int quiescence(Board& board, int alpha, int beta, int ply = 0) {
         }
         int score = -quiescence(board, -beta, -alpha, ply + 1);
         board.unmakeMove(move);
+        if (nnue_loaded) {
+            global_nnue_acc.computed[0] = false;
+            global_nnue_acc.computed[1] = false;
+        }
 
         if (score >= beta) return beta;
         if (score > alpha) alpha = score;
@@ -937,8 +941,16 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         if (non_pawn_kings && static_eval >= beta) {
             int R = opt_nmp_base + depth / opt_nmp_depth_div + std::min(3, (static_eval - beta) / opt_nmp_eval_div);
             board.makeNullMove();
+            if (nnue_loaded) {
+                global_nnue_acc.computed[0] = false;
+                global_nnue_acc.computed[1] = false;
+            }
             int null_score = -negamax(board, depth - 1 - R, -beta, -beta + 1, ply + 1, false, Move::NULL_MOVE, prev_move);
             board.unmakeNullMove();
+            if (nnue_loaded) {
+                global_nnue_acc.computed[0] = false;
+                global_nnue_acc.computed[1] = false;
+            }
             if (abort_search) return 0;
             if (null_score >= beta) {
                 // Don't return unverified mates
@@ -1043,9 +1055,9 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         // Always call update_accumulator to incrementally update opponent's features
 
         board.makeMove(move);
-        if (is_king_move) {
-            // Only refresh the side that made the king move
-            // nnue::refresh_accumulator(board, ~board.sideToMove());
+        if (nnue_loaded) {
+            global_nnue_acc.computed[0] = false;
+            global_nnue_acc.computed[1] = false;
         }
         bool gives_check = board.inCheck();
 
@@ -1059,6 +1071,10 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
         if (!is_root && !in_check && !gives_check && !is_capture && !is_promo
             && depth <= 8 && move_count > 1 && static_eval + fp_margin <= alpha) {
         board.unmakeMove(move);
+        if (nnue_loaded) {
+            global_nnue_acc.computed[0] = false;
+            global_nnue_acc.computed[1] = false;
+        }
             continue;
         }
 
@@ -1108,6 +1124,10 @@ int negamax(Board& board, int depth, int alpha, int beta, int ply, bool allow_nu
             }
         }
         board.unmakeMove(move);
+        if (nnue_loaded) {
+            global_nnue_acc.computed[0] = false;
+            global_nnue_acc.computed[1] = false;
+        }
         if (abort_search) return 0;
 
         if (score > best_score) {
