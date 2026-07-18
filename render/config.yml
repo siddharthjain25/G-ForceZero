@@ -1,0 +1,56 @@
+token: "YOUR_API_TOKEN"
+url: "https://lichess.org/"
+
+engine:
+  dir: "/app/G-ForceZero/cpp_engine_2.0/"
+  name: "gforce_engine"
+  protocol: "uci"
+  uci_options:
+    Threads: 1
+    Hash: 64
+
+abort_time: 20
+fake_think_time: false
+
+challenge:
+  concurrency: 1
+  sort_by: "best"
+  accept_bot: true
+  only_bot: false
+  max_increment: 180
+  max_base: 315360000
+  max_days: 14
+  min_increment: 0
+  min_base: 0
+  min_days: 0
+  variants:
+    - standard
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+    - classical
+  modes:
+    - casual
+    - rated
+
+matchmaking:
+  allow_matchmaking: true
+  allow_during_games: false
+  challenge_timeout: 1
+  challenge_variant: "random"
+  challenge_mode: "random"
+  opponent_rating_difference: 300
+  rating_preference: "none"
+  challenge_filter: none
+  include_challenge_block_list: false
+  challenge_initial_time:
+    - 60
+    - 180
+    - 300
+    - 600
+  challenge_increment:
+    - 1
+    - 2
+    - 3
+    - 5

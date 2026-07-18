@@ -1,8 +1,51 @@
+# Virtual Environments
+venv/
 .venv/
-stockfish/
-cpp_engine/lichess_db_standard_rated_2017-02.pgn
+__pycache__/
+
+# Compiled C++ Binaries & Build Files
+cpp_engine/nnue_engine
+cpp_engine/pgn_to_epd
 cpp_engine/gforce
-/cpp_engine/CMakeFiles
-cpp_engine/lichess_2017_training.epd
-cpp_engine/lichess_db_standard_rated_2019-01.pgn
-cpp_engine/wdl_dataset.epd
+cpp_engine/test_*
+cpp_engine/CMakeFiles/
+cpp_engine/CMakeCache.txt
+cpp_engine/Makefile
+cpp_engine/cmake_install.cmake
+cpp_engine_2.0/nnue_engine
+cpp_engine_2.0/pgn_to_epd
+cpp_engine_2.0/gforce
+cpp_engine_2.0/test_*
+cpp_engine_2.0/CMakeFiles/
+cpp_engine_2.0/CMakeCache.txt
+cpp_engine_2.0/Makefile
+cpp_engine_2.0/cmake_install.cmake
+cpp_engine_2.0/src/sf_bridge/CMakeFiles/
+cpp_engine_2.0/src/sf_bridge/CMakeCache.txt
+cpp_engine_2.0/src/sf_bridge/Makefile
+cpp_engine_2.0/src/sf_bridge/cmake_install.cmake
+cpp_engine_2.0/build/
+
+# Massive Training Datasets (Do NOT push to GitHub)
+*.epd
+*.pgn
+*.jsonl
+*.jsonl.zst
+eval_chunk_*
+stockfish/
+
+# PyTorch Checkpoint States
+best_model.pth
+*.pt
+
+# OS Generated
+.DS_Store
+play_match.py
+/Stockfish
+/cpp_engine/Stockfish-master
+cpp_engine/nn-af1339a6dea3.nnue
+cpp_engine/build/
+*.o
+cpp_engine/nnue-probe/
+sf12/
+cpp_engine_2.0/_deps/

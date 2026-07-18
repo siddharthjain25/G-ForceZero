@@ -1,0 +1,30 @@
+# 1. Install dependencies
+!pip install chess
+
+# 2. Clone the repository (or pull latest if it exists)
+import os
+if not os.path.exists("G-ForceZero"):
+    !git clone https://github.com/victorvondoom25/G-ForceZero.git
+else:
+    %cd G-ForceZero
+    !git pull
+    %cd ..
+
+# 3. Enter the repository root where the converter script is
+%cd G-ForceZero
+
+# 4. Compile the ultra-fast C++ PGN parser
+%cd cpp_engine
+!cmake .
+!make pgn_to_epd
+
+# 5. Convert massive PGNs into EPD instantly using C++
+# (IMPORTANT: Change 'YOUR_DATASET_NAME' and 'games.pgn' to match the actual path of your uploaded files!)
+# Usage: ./pgn_to_epd <output.epd> <input1.pgn> <input2.pgn> ...
+!./pgn_to_epd /kaggle/working/training_data.epd /kaggle/input/YOUR_DATASET_NAME/games.pgn
+
+# 6. Train the Neural Network instantly on the new data!
+!python3 trainer/train_halfkp.py /kaggle/working/training_data.epd
+
+# 7. Copy the trained brain to the main output directory so you can download it easily!
+!cp brain.nnue /kaggle/working/brain.nnue

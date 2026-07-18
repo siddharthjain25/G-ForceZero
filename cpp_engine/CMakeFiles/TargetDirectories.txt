@@ -1,3 +1,0 @@
-/home/sid/Documents/GitHub/G-ForceZero/cpp_engine/CMakeFiles/nnue_engine.dir
-/home/sid/Documents/GitHub/G-ForceZero/cpp_engine/CMakeFiles/edit_cache.dir
-/home/sid/Documents/GitHub/G-ForceZero/cpp_engine/CMakeFiles/rebuild_cache.dir

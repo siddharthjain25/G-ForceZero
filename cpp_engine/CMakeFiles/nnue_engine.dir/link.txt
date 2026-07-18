@@ -1,1 +1,0 @@
-/usr/bin/c++  -O3 -mavx2 -g -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/nnue_engine.dir/link.d CMakeFiles/nnue_engine.dir/nnue_engine.cpp.o CMakeFiles/nnue_engine.dir/nnue.cpp.o -o nnue_engine  -lpthread

@@ -1,0 +1,27 @@
+# 1. Mount Google Drive (so your brain.nnue is saved forever!)
+from google.colab import drive
+drive.mount('/content/drive')
+
+# 2. Navigate to Drive and download your repository
+%cd /content/drive/MyDrive
+import os
+if not os.path.exists("G-ForceZero"):
+    !git clone https://github.com/victorvondoom25/G-ForceZero.git
+else:
+    # If it already exists, just pull the latest updates!
+    %cd G-ForceZero
+    !git pull
+    %cd ..
+
+# 3. Enter the engine directory
+%cd /content/drive/MyDrive/G-ForceZero/cpp_engine
+
+# 4. Compile the C++ engine (Colab is Ubuntu, so it compiles perfectly!)
+!cmake -B build -DCMAKE_BUILD_TYPE=Release
+!cmake --build build -j4
+
+# 5. Make sure the script is executable
+!chmod +x autopilot.py
+
+# 6. Run the Autopilot forever!
+!python3 autopilot.py
