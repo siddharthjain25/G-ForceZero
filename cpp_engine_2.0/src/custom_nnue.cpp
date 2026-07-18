@@ -151,9 +151,10 @@ static inline int color_idx(const chess::Color& c) {
     return c == chess::Color::WHITE ? 0 : 1;
 }
 
-// HalfKAv2_hm: feature = KingBuckets[ksq] + PieceSquareIndex + oriented_sq
+// HalfKAv2_hm: feature = KingBuckets[ksq^flip] + PieceSquareIndex + (sq ^ OrientTBL[ksq] ^ flip)
 static int make_feature(int perspective, int sq, int pi, int ksq) {
-    return KingBuckets[ksq] + PieceSquareIndex[perspective][pi] + (sq ^ OrientTBL[sq]);
+    const int flip = 56 * perspective;
+    return KingBuckets[ksq ^ flip] + PieceSquareIndex[perspective][pi] + (sq ^ OrientTBL[ksq] ^ flip);
 }
 
 // ─── Accumulator Refresh ──────────────────────────────────────────────────
@@ -312,7 +313,7 @@ int evaluate(Accumulator& acc, const chess::Board& board, chess::Color stm) {
     int positional = static_cast<int>((int64_t(fwdOut) * mul) / div);
     int score = (psqt + positional) / OUTPUT_SCALE;
 
-    return (us == 0) ? score : -score;
+    return score;
 }
 
 }  // namespace custom_nnue
